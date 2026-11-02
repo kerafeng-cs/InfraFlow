@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Môi trường đang ngủ</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+  <style>
+    main { max-width: 560px; margin-top: 12vh; text-align: center; }
+    .panel { padding: 32px 28px; }
+    ol { text-align: left; margin: 18px auto 0; max-width: 380px; }
+    li.done { color: var(--muted); text-decoration: line-through; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="panel">
+      <h2 id="title">Môi trường</h2>
+      <p id="state" class="muted">Đang tải…</p>
+      <button id="wake" class="primary" hidden>Đánh thức</button>
+      <ol id="steps"></ol>
+      <p id="note" class="muted"></p>
+    </div>
+  </main>
+  <script src="sleep.js"></script>
+</body>
+</html>

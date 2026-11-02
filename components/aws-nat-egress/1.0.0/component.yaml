@@ -1,0 +1,38 @@
+ics_version: "0.1"
+component:
+  name: aws-nat-egress
+  version: 1.0.0
+  owner: infraflow
+  summary: "NAT Gateway một AZ cho private subnet"
+  billing_class: hourly_no_data
+  data_class: none
+  resource_types: [aws_eip, aws_nat_gateway, aws_route]
+  data_resource_types: []
+  primary_resource: aws_nat_gateway.this
+  system_inputs: [name_prefix]
+provides:
+  - port: egress
+    type: net.egress/v1
+    attributes: { nat_gateway_id: nat_gateway_id }
+requires:
+  - port: net
+    type: net.vpc/v1
+    when: present
+    inputs: { public_subnet_ids: public_subnet_ids, private_route_table_id: private_route_table_id }
+parameters: {}
+outputs:
+  nat_gateway_id: { stable: false }   # đổi sau mỗi lần thức
+  public_ip:      { stable: false }
+lifecycle:
+  presence_variable: present
+  actions:
+    observe: { driver: nat_gateway.describe }
+  levels: { awake: PRESENT, shallow: PRESENT, deep: ABSENT, hibernate: ABSENT }
+  serving_states: [PRESENT]
+health:
+  probe: { driver: terraform.presence, timeout_s: 600 }
+cost:
+  - { meter: nat_gateway_hour, in_states: [PRESENT] }
+  - { meter: public_ipv4_hour, in_states: [PRESENT] }
+conformance:
+  claimed_level: L2

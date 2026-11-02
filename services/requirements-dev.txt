@@ -1,0 +1,4 @@
+# Lambda và CodeBuild chỉ cần thư viện chuẩn + boto3 có sẵn.
+# Máy phát triển cần thêm:
+pyyaml>=6
+boto3>=1.34

@@ -1,0 +1,50 @@
+ics_version: "0.1"
+component:
+  name: aws-alb-https-entry
+  version: 1.0.0
+  owner: infraflow
+  summary: "ALB công khai ở 2 public subnet; HTTPS khi có chứng chỉ"
+  billing_class: hourly_no_data
+  data_class: none
+  resource_types:
+    - aws_lb
+    - aws_lb_target_group
+    - aws_lb_target_group_attachment
+    - aws_lb_listener
+    - aws_security_group
+    - aws_vpc_security_group_ingress_rule
+    - aws_vpc_security_group_egress_rule
+  data_resource_types: []
+  primary_resource: aws_lb.this
+  system_inputs: [name_prefix, certificate_arn]
+provides:
+  - port: public
+    type: http.public/v1
+    attributes: { dns_name: dns_name, zone_id: zone_id }
+requires:
+  - port: net
+    type: net.vpc/v1
+    when: present
+    inputs: { vpc_id: vpc_id, public_subnet_ids: public_subnet_ids }
+  - port: backend
+    type: http.backend/v1
+    when: serving
+    inputs: { instance_id: target_instance_id, port: target_port, health_path: health_path, security_group_id: target_security_group_id }
+parameters: {}
+outputs:
+  dns_name:         { stable: false }
+  zone_id:          { stable: true }
+  target_group_arn: { stable: false }
+lifecycle:
+  presence_variable: present
+  actions:
+    observe: { driver: elbv2.describe }
+  levels: { awake: PRESENT, shallow: PRESENT, deep: ABSENT, hibernate: ABSENT }
+  serving_states: [PRESENT]
+health:
+  probe: { driver: elbv2.target_healthy, timeout_s: 900 }
+cost:
+  - { meter: alb_hour, in_states: [PRESENT] }
+  - { meter: public_ipv4_hour, in_states: [PRESENT], count: 2 }
+conformance:
+  claimed_level: L2

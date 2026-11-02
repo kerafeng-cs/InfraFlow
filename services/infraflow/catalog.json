@@ -1,0 +1,831 @@
+{
+ "blueprints": {
+  "web-db@1.0.0": {
+   "bindings": [
+    {
+     "from": "egress.net",
+     "to": "network.net"
+    },
+    {
+     "from": "database.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.egress",
+     "to": "egress.egress"
+    },
+    {
+     "from": "app.db",
+     "to": "database.db"
+    },
+    {
+     "from": "app.workload",
+     "to": "sys.lease_app"
+    },
+    {
+     "from": "entry.net",
+     "to": "network.net"
+    },
+    {
+     "from": "entry.backend",
+     "to": "app.http"
+    },
+    {
+     "from": "sys.dns",
+     "to": "entry.public"
+    }
+   ],
+   "blueprint": {
+    "name": "web-db",
+    "owner": "infraflow",
+    "summary": "Web app (Docker trên EC2) + PostgreSQL + ALB",
+    "version": "1.0.0"
+   },
+   "ics_version": "0.1",
+   "instances": {
+    "app": {
+     "component": "aws-ec2-docker-app@1.0.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "database": {
+     "component": "aws-rds-postgres@1.0.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "egress": {
+     "component": "aws-nat-egress@1.0.0"
+    },
+    "entry": {
+     "component": "aws-alb-https-entry@1.0.0"
+    },
+    "network": {
+     "component": "aws-network-basic@1.0.0"
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "supported_levels": [
+    "awake",
+    "deep",
+    "hibernate"
+   ]
+  }
+ },
+ "components": {
+  "aws-alb-https-entry@1.0.0": {
+   "_dir": "components/aws-alb-https-entry/1.0.0",
+   "component": {
+    "billing_class": "hourly_no_data",
+    "data_class": "none",
+    "data_resource_types": [],
+    "name": "aws-alb-https-entry",
+    "owner": "infraflow",
+    "primary_resource": "aws_lb.this",
+    "resource_types": [
+     "aws_lb",
+     "aws_lb_target_group",
+     "aws_lb_target_group_attachment",
+     "aws_lb_listener",
+     "aws_security_group",
+     "aws_vpc_security_group_ingress_rule",
+     "aws_vpc_security_group_egress_rule"
+    ],
+    "summary": "ALB công khai ở 2 public subnet; HTTPS khi có chứng chỉ",
+    "system_inputs": [
+     "name_prefix",
+     "certificate_arn"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L2"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "PRESENT"
+     ],
+     "meter": "alb_hour"
+    },
+    {
+     "count": 2,
+     "in_states": [
+      "PRESENT"
+     ],
+     "meter": "public_ipv4_hour"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "elbv2.target_healthy",
+     "timeout_s": 900
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "elbv2.describe"
+     }
+    },
+    "levels": {
+     "awake": "PRESENT",
+     "deep": "ABSENT",
+     "hibernate": "ABSENT",
+     "shallow": "PRESENT"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "PRESENT"
+    ]
+   },
+   "outputs": {
+    "dns_name": {
+     "stable": false
+    },
+    "target_group_arn": {
+     "stable": false
+    },
+    "zone_id": {
+     "stable": true
+    }
+   },
+   "parameters": {},
+   "provides": [
+    {
+     "attributes": {
+      "dns_name": "dns_name",
+      "zone_id": "zone_id"
+     },
+     "port": "public",
+     "type": "http.public/v1"
+    }
+   ],
+   "requires": [
+    {
+     "inputs": {
+      "public_subnet_ids": "public_subnet_ids",
+      "vpc_id": "vpc_id"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
+     "when": "present"
+    },
+    {
+     "inputs": {
+      "health_path": "health_path",
+      "instance_id": "target_instance_id",
+      "port": "target_port",
+      "security_group_id": "target_security_group_id"
+     },
+     "port": "backend",
+     "type": "http.backend/v1",
+     "when": "serving"
+    }
+   ]
+  },
+  "aws-ec2-docker-app@1.0.0": {
+   "_dir": "components/aws-ec2-docker-app/1.0.0",
+   "component": {
+    "billing_class": "stoppable",
+    "data_class": "none",
+    "data_resource_types": [],
+    "name": "aws-ec2-docker-app",
+    "owner": "infraflow",
+    "primary_resource": "aws_instance.app",
+    "resource_types": [
+     "aws_instance",
+     "aws_security_group",
+     "aws_vpc_security_group_egress_rule",
+     "aws_vpc_security_group_ingress_rule",
+     "aws_iam_role",
+     "aws_iam_role_policy",
+     "aws_iam_role_policy_attachment",
+     "aws_iam_instance_profile"
+    ],
+    "summary": "EC2 Amazon Linux 2023 ở private subnet chạy một Docker image",
+    "system_inputs": [
+     "name_prefix",
+     "env_id"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L2"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "RUNNING"
+     ],
+     "meter": "ec2_instance_hour",
+     "param": "size"
+    },
+    {
+     "in_states": [
+      "RUNNING",
+      "STOPPED"
+     ],
+     "meter": "ebs_gb_month",
+     "param": "root_volume_gb"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "ec2_instance.status_ok",
+     "timeout_s": 600
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "ec2_instance.describe"
+     },
+     "start": {
+      "driver": "ec2_instance.start"
+     },
+     "stop": {
+      "driver": "ec2_instance.stop"
+     }
+    },
+    "levels": {
+     "awake": "RUNNING",
+     "deep": "STOPPED",
+     "hibernate": "ABSENT",
+     "shallow": "STOPPED"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "RUNNING"
+    ]
+   },
+   "outputs": {
+    "health_path": {
+     "stable": true
+    },
+    "instance_id": {
+     "stable": true
+    },
+    "port": {
+     "stable": true
+    },
+    "security_group_id": {
+     "stable": true
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "provides": [
+    {
+     "attributes": {
+      "health_path": "health_path",
+      "instance_id": "instance_id",
+      "port": "port",
+      "security_group_id": "security_group_id"
+     },
+     "port": "http",
+     "type": "http.backend/v1"
+    }
+   ],
+   "requires": [
+    {
+     "inputs": {
+      "private_subnet_ids": "subnet_ids",
+      "vpc_id": "vpc_id"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
+     "when": "present"
+    },
+    {
+     "port": "egress",
+     "type": "net.egress/v1",
+     "when": "serving"
+    },
+    {
+     "inputs": {
+      "host": "db_host",
+      "name": "db_name",
+      "password_param": "db_password_param",
+      "port": "db_port",
+      "security_group_id": "db_security_group_id",
+      "user": "db_user"
+     },
+     "port": "db",
+     "type": "db.postgres/v1",
+     "when": "serving"
+    },
+    {
+     "inputs": {
+      "health_path": "app_health_path",
+      "image": "app_image",
+      "port": "app_port"
+     },
+     "port": "workload",
+     "type": "workload.container/v1",
+     "when": "present"
+    }
+   ]
+  },
+  "aws-nat-egress@1.0.0": {
+   "_dir": "components/aws-nat-egress/1.0.0",
+   "component": {
+    "billing_class": "hourly_no_data",
+    "data_class": "none",
+    "data_resource_types": [],
+    "name": "aws-nat-egress",
+    "owner": "infraflow",
+    "primary_resource": "aws_nat_gateway.this",
+    "resource_types": [
+     "aws_eip",
+     "aws_nat_gateway",
+     "aws_route"
+    ],
+    "summary": "NAT Gateway một AZ cho private subnet",
+    "system_inputs": [
+     "name_prefix"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L2"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "PRESENT"
+     ],
+     "meter": "nat_gateway_hour"
+    },
+    {
+     "in_states": [
+      "PRESENT"
+     ],
+     "meter": "public_ipv4_hour"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "terraform.presence",
+     "timeout_s": 600
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "nat_gateway.describe"
+     }
+    },
+    "levels": {
+     "awake": "PRESENT",
+     "deep": "ABSENT",
+     "hibernate": "ABSENT",
+     "shallow": "PRESENT"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "PRESENT"
+    ]
+   },
+   "outputs": {
+    "nat_gateway_id": {
+     "stable": false
+    },
+    "public_ip": {
+     "stable": false
+    }
+   },
+   "parameters": {},
+   "provides": [
+    {
+     "attributes": {
+      "nat_gateway_id": "nat_gateway_id"
+     },
+     "port": "egress",
+     "type": "net.egress/v1"
+    }
+   ],
+   "requires": [
+    {
+     "inputs": {
+      "private_route_table_id": "private_route_table_id",
+      "public_subnet_ids": "public_subnet_ids"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
+     "when": "present"
+    }
+   ]
+  },
+  "aws-network-basic@1.0.0": {
+   "_dir": "components/aws-network-basic/1.0.0",
+   "component": {
+    "billing_class": "free",
+    "data_class": "none",
+    "data_resource_types": [],
+    "name": "aws-network-basic",
+    "owner": "infraflow",
+    "resource_types": [
+     "aws_vpc",
+     "aws_internet_gateway",
+     "aws_subnet",
+     "aws_route_table",
+     "aws_route",
+     "aws_route_table_association"
+    ],
+    "summary": "VPC, 2 public + 2 private subnet ở 2 AZ",
+    "system_inputs": [
+     "name_prefix"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L2"
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "vpc.describe"
+     }
+    },
+    "levels": {
+     "awake": "PRESENT",
+     "deep": "PRESENT",
+     "hibernate": "PRESENT",
+     "shallow": "PRESENT"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "PRESENT"
+    ]
+   },
+   "outputs": {
+    "private_route_table_id": {
+     "stable": true
+    },
+    "private_subnet_ids": {
+     "stable": true
+    },
+    "public_subnet_ids": {
+     "stable": true
+    },
+    "vpc_id": {
+     "stable": true
+    }
+   },
+   "provides": [
+    {
+     "attributes": {
+      "private_route_table_id": "private_route_table_id",
+      "private_subnet_ids": "private_subnet_ids",
+      "public_subnet_ids": "public_subnet_ids",
+      "vpc_id": "vpc_id"
+     },
+     "port": "net",
+     "type": "net.vpc/v1"
+    }
+   ],
+   "requires": []
+  },
+  "aws-rds-postgres@1.0.0": {
+   "_dir": "components/aws-rds-postgres/1.0.0",
+   "component": {
+    "billing_class": "data",
+    "data_class": "persistent",
+    "data_resource_types": [
+     "aws_db_instance"
+    ],
+    "name": "aws-rds-postgres",
+    "owner": "infraflow",
+    "primary_resource": "aws_db_instance.this",
+    "resource_types": [
+     "aws_db_instance",
+     "aws_db_subnet_group",
+     "aws_security_group",
+     "aws_vpc_security_group_ingress_rule",
+     "random_password",
+     "aws_ssm_parameter"
+    ],
+    "summary": "PostgreSQL 16 trên RDS, single-AZ",
+    "system_inputs": [
+     "name_prefix",
+     "env_id"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L3"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "RUNNING"
+     ],
+     "meter": "rds_instance_hour",
+     "param": "size"
+    },
+    {
+     "in_states": [
+      "RUNNING",
+      "STOPPED"
+     ],
+     "meter": "rds_storage_gb_month",
+     "param": "allocated_storage_gb"
+    },
+    {
+     "in_states": [
+      "SNAPSHOTTED"
+     ],
+     "meter": "snapshot_gb_month"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "rds_instance.available",
+     "target": "db_identifier",
+     "timeout_s": 900
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "rds_instance.describe",
+      "target": "db_identifier"
+     },
+     "snapshot": {
+      "driver": "rds_instance.snapshot",
+      "target": "db_identifier"
+     },
+     "start": {
+      "driver": "rds_instance.start",
+      "target": "db_identifier"
+     },
+     "stop": {
+      "driver": "rds_instance.stop",
+      "target": "db_identifier"
+     }
+    },
+    "levels": {
+     "awake": "RUNNING",
+     "deep": "STOPPED",
+     "hibernate": "SNAPSHOTTED",
+     "shallow": "STOPPED"
+    },
+    "presence_variable": "present",
+    "quirks": [
+     {
+      "auto_start_after_days": 7
+     }
+    ],
+    "restore_variable": "restore_from_snapshot",
+    "serving_states": [
+     "RUNNING"
+    ]
+   },
+   "outputs": {
+    "db_identifier": {
+     "stable": true
+    },
+    "endpoint_address": {
+     "stable": true
+    },
+    "endpoint_port": {
+     "stable": true
+    },
+    "security_group_id": {
+     "stable": true
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "provides": [
+    {
+     "attributes": {
+      "host": "endpoint_address",
+      "name": "db_name",
+      "password_param": "password_ssm_name",
+      "port": "endpoint_port",
+      "security_group_id": "security_group_id",
+      "user": "db_user"
+     },
+     "port": "db",
+     "type": "db.postgres/v1"
+    }
+   ],
+   "requires": [
+    {
+     "inputs": {
+      "private_subnet_ids": "subnet_ids",
+      "vpc_id": "vpc_id"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
+     "when": "present"
+    }
+   ]
+  }
+ },
+ "registry": {
+  "classes": {
+   "data": {
+    "initial": "RUNNING",
+    "states": [
+     "ABSENT",
+     "RUNNING",
+     "STOPPED",
+     "SNAPSHOTTED"
+    ]
+   },
+   "free": {
+    "initial": "PRESENT",
+    "states": [
+     "ABSENT",
+     "PRESENT"
+    ]
+   },
+   "hourly_no_data": {
+    "initial": "PRESENT",
+    "states": [
+     "ABSENT",
+     "PRESENT"
+    ]
+   },
+   "stoppable": {
+    "initial": "RUNNING",
+    "states": [
+     "ABSENT",
+     "RUNNING",
+     "STOPPED"
+    ]
+   }
+  },
+  "drivers": [
+   "vpc.describe",
+   "nat_gateway.describe",
+   "ec2_instance.describe",
+   "ec2_instance.start",
+   "ec2_instance.stop",
+   "ec2_instance.status_ok",
+   "rds_instance.describe",
+   "rds_instance.start",
+   "rds_instance.stop",
+   "rds_instance.snapshot",
+   "rds_instance.available",
+   "elbv2.describe",
+   "elbv2.target_healthy",
+   "dns.point",
+   "wait.seconds",
+   "terraform.presence",
+   "terraform.restore"
+  ],
+  "ics_version": "0.1",
+  "port_types": {
+   "db.postgres/v1": [
+    "host",
+    "port",
+    "name",
+    "user",
+    "password_param",
+    "security_group_id"
+   ],
+   "http.backend/v1": [
+    "instance_id",
+    "port",
+    "health_path",
+    "security_group_id"
+   ],
+   "http.public/v1": [
+    "dns_name",
+    "zone_id"
+   ],
+   "net.egress/v1": [
+    "nat_gateway_id"
+   ],
+   "net.vpc/v1": [
+    "vpc_id",
+    "public_subnet_ids",
+    "private_subnet_ids",
+    "private_route_table_id"
+   ],
+   "workload.container/v1": [
+    "image",
+    "port",
+    "health_path"
+   ]
+  },
+  "resource_types": {
+   "aws_db_instance": {
+    "class": "data",
+    "data": true
+   },
+   "aws_db_subnet_group": {
+    "class": null
+   },
+   "aws_ebs_volume": {
+    "class": "data",
+    "data": true
+   },
+   "aws_eip": {
+    "class": "hourly_no_data"
+   },
+   "aws_iam_instance_profile": {
+    "class": null
+   },
+   "aws_iam_role": {
+    "class": null
+   },
+   "aws_iam_role_policy": {
+    "class": null
+   },
+   "aws_iam_role_policy_attachment": {
+    "class": null
+   },
+   "aws_instance": {
+    "class": "stoppable"
+   },
+   "aws_internet_gateway": {
+    "class": "free"
+   },
+   "aws_lb": {
+    "class": "hourly_no_data"
+   },
+   "aws_lb_listener": {
+    "class": null
+   },
+   "aws_lb_target_group": {
+    "class": null
+   },
+   "aws_lb_target_group_attachment": {
+    "class": null
+   },
+   "aws_nat_gateway": {
+    "class": "hourly_no_data"
+   },
+   "aws_route": {
+    "class": null
+   },
+   "aws_route_table": {
+    "class": "free"
+   },
+   "aws_route_table_association": {
+    "class": "free"
+   },
+   "aws_security_group": {
+    "class": null
+   },
+   "aws_ssm_parameter": {
+    "class": null
+   },
+   "aws_subnet": {
+    "class": "free"
+   },
+   "aws_vpc": {
+    "class": "free"
+   },
+   "aws_vpc_security_group_egress_rule": {
+    "class": null
+   },
+   "aws_vpc_security_group_ingress_rule": {
+    "class": null
+   },
+   "random_password": {
+    "class": null
+   }
+  }
+ }
+}

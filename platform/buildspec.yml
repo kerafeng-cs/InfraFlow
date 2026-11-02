@@ -1,0 +1,18 @@
+version: 0.2
+
+env:
+  shell: bash
+
+phases:
+  install:
+    commands:
+      - curl -sSfLo /tmp/tf.zip "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+      - unzip -oq /tmp/tf.zip -d /usr/local/bin && terraform version
+      - mkdir -p /tmp/work/code /tmp/work/components
+      - aws s3 cp "s3://${ARTIFACT_BUCKET}/runner/code.zip" /tmp/code.zip --only-show-errors
+      - aws s3 cp "s3://${ARTIFACT_BUCKET}/runner/components.zip" /tmp/components.zip --only-show-errors
+      - unzip -oq /tmp/code.zip -d /tmp/work/code
+      - unzip -oq /tmp/components.zip -d /tmp/work/components
+  build:
+    commands:
+      - bash /tmp/work/code/runner/run_terraform.sh

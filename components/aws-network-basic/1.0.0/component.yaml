@@ -1,0 +1,39 @@
+ics_version: "0.1"
+component:
+  name: aws-network-basic
+  version: 1.0.0
+  owner: infraflow
+  summary: "VPC, 2 public + 2 private subnet ở 2 AZ"
+  billing_class: free
+  data_class: none
+  resource_types:
+    - aws_vpc
+    - aws_internet_gateway
+    - aws_subnet
+    - aws_route_table
+    - aws_route
+    - aws_route_table_association
+  data_resource_types: []
+  system_inputs: [name_prefix]
+provides:
+  - port: net
+    type: net.vpc/v1
+    attributes:
+      vpc_id: vpc_id
+      public_subnet_ids: public_subnet_ids
+      private_subnet_ids: private_subnet_ids
+      private_route_table_id: private_route_table_id
+requires: []
+outputs:
+  vpc_id:                 { stable: true }
+  public_subnet_ids:      { stable: true }
+  private_subnet_ids:     { stable: true }
+  private_route_table_id: { stable: true }
+lifecycle:
+  presence_variable: present
+  actions:
+    observe: { driver: vpc.describe }
+  levels: { awake: PRESENT, shallow: PRESENT, deep: PRESENT, hibernate: PRESENT }
+  serving_states: [PRESENT]
+conformance:
+  claimed_level: L2

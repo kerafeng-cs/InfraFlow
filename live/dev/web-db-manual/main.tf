@@ -1,0 +1,180 @@
+# Sinh tự động bởi trình biên dịch Blueprint của InfraFlow. KHÔNG SỬA TAY.
+# blueprint: web-db@1.0.0
+# compiled_hash: sha256:acb853bfd4111c2a3d2586e85bff1b6a11524cb24c13e95fe41e4b92de083530
+
+variable "name_prefix" {
+  type        = string
+  description = "Tiền tố tên tài nguyên, bằng env_id"
+}
+
+variable "env_id" {
+  type        = string
+  description = "Định danh Environment"
+}
+
+variable "certificate_arn" {
+  type        = string
+  description = "Chứng chỉ ACM wildcard; null = chỉ HTTP"
+  default     = null
+}
+
+variable "size" {
+  type    = string
+  default = "small"
+}
+
+variable "app_image" {
+  type    = string
+  default = "public.ecr.aws/nginx/nginx:stable"
+}
+
+variable "app_port" {
+  type    = number
+  default = 80
+}
+
+variable "app_health_path" {
+  type    = string
+  default = "/"
+}
+
+variable "network_present" {
+  type        = bool
+  description = "Bật/tắt instance network (free)"
+}
+
+variable "egress_present" {
+  type        = bool
+  description = "Bật/tắt instance egress (hourly_no_data)"
+}
+
+variable "database_present" {
+  type        = bool
+  description = "Bật/tắt instance database (data)"
+}
+
+variable "database_restore_snapshot" {
+  type    = string
+  default = null
+}
+
+variable "app_present" {
+  type        = bool
+  description = "Bật/tắt instance app (stoppable)"
+}
+
+variable "entry_present" {
+  type        = bool
+  description = "Bật/tắt instance entry (hourly_no_data)"
+}
+
+# ---------- network: aws-network-basic@1.0.0 (free) ----------
+module "network" {
+  source = "../../../components/aws-network-basic/1.0.0"
+  count  = var.network_present ? 1 : 0
+
+  name_prefix = var.name_prefix
+}
+
+# ---------- egress: aws-nat-egress@1.0.0 (hourly_no_data) ----------
+module "egress" {
+  source = "../../../components/aws-nat-egress/1.0.0"
+  count  = var.egress_present ? 1 : 0
+
+  name_prefix = var.name_prefix
+
+  # binding: egress.net <- network.net (net.vpc/v1, present)
+  public_subnet_ids      = one(module.network[*].public_subnet_ids)
+  private_route_table_id = one(module.network[*].private_route_table_id)
+}
+
+# ---------- database: aws-rds-postgres@1.0.0 (data) ----------
+module "database" {
+  source = "../../../components/aws-rds-postgres/1.0.0"
+  count  = var.database_present ? 1 : 0
+
+  name_prefix           = var.name_prefix
+  env_id                = var.env_id
+  size                  = var.size
+  restore_from_snapshot = var.database_restore_snapshot
+
+  # binding: database.net <- network.net (net.vpc/v1, present)
+  vpc_id     = one(module.network[*].vpc_id)
+  subnet_ids = one(module.network[*].private_subnet_ids)
+}
+
+# ---------- app: aws-ec2-docker-app@1.0.0 (stoppable) ----------
+module "app" {
+  source = "../../../components/aws-ec2-docker-app/1.0.0"
+  count  = var.app_present ? 1 : 0
+
+  name_prefix = var.name_prefix
+  env_id      = var.env_id
+  size        = var.size
+
+  # binding: app.net <- network.net (net.vpc/v1, present)
+  vpc_id     = one(module.network[*].vpc_id)
+  subnet_ids = one(module.network[*].private_subnet_ids)
+
+  # binding: app.egress <- egress.egress (net.egress/v1, serving)
+
+  # binding: app.db <- database.db (db.postgres/v1, serving)
+  db_host              = one(module.database[*].endpoint_address)
+  db_port              = one(module.database[*].endpoint_port)
+  db_name              = one(module.database[*].db_name)
+  db_user              = one(module.database[*].db_user)
+  db_password_param    = one(module.database[*].password_ssm_name)
+  db_security_group_id = one(module.database[*].security_group_id)
+
+  # binding: app.workload <- sys.lease_app (workload.container/v1, present)
+  app_image       = var.app_image
+  app_port        = var.app_port
+  app_health_path = var.app_health_path
+}
+
+# ---------- entry: aws-alb-https-entry@1.0.0 (hourly_no_data) ----------
+module "entry" {
+  source = "../../../components/aws-alb-https-entry/1.0.0"
+  count  = var.entry_present ? 1 : 0
+
+  name_prefix     = var.name_prefix
+  certificate_arn = var.certificate_arn
+
+  # binding: entry.net <- network.net (net.vpc/v1, present)
+  vpc_id            = one(module.network[*].vpc_id)
+  public_subnet_ids = one(module.network[*].public_subnet_ids)
+
+  # binding: entry.backend <- app.http (http.backend/v1, serving)
+  target_instance_id       = one(module.app[*].instance_id)
+  target_port              = one(module.app[*].port)
+  health_path              = one(module.app[*].health_path)
+  target_security_group_id = one(module.app[*].security_group_id)
+}
+
+output "network" {
+  value = one(module.network[*])
+}
+
+output "egress" {
+  value = one(module.egress[*])
+}
+
+output "database" {
+  value = one(module.database[*])
+}
+
+output "app" {
+  value = one(module.app[*])
+}
+
+output "entry" {
+  value = one(module.entry[*])
+}
+
+output "public_endpoint" {
+  value = one(module.entry[*].dns_name)
+}
+
+output "compiled_hash" {
+  value = "sha256:acb853bfd4111c2a3d2586e85bff1b6a11524cb24c13e95fe41e4b92de083530"
+}

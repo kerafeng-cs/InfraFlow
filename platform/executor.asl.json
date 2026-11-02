@@ -1,0 +1,405 @@
+{
+  "Comment": "InfraFlow lifecycle executor: thông dịch lifecycle plan đã qua model checking (TD 8.1, IC 10.1)",
+  "StartAt": "Pre",
+  "States": {
+    "Pre": {
+      "Type": "Map",
+      "ItemsPath": "$.plan.pre",
+      "ItemSelector": {
+        "action.$": "$$.Map.Item.Value",
+        "ctx.$": "$.ctx"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "PreStep",
+        "States": {
+          "PreStep": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${drivers_arn}",
+              "Payload.$": "$"
+            },
+            "ResultSelector": {
+              "result.$": "$.Payload"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Stages",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "Blocked"
+        }
+      ],
+      "MaxConcurrency": 1
+    },
+    "Stages": {
+      "Type": "Map",
+      "ItemsPath": "$.plan.stages",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "stage.$": "$$.Map.Item.Value",
+        "ctx.$": "$.ctx"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "HasTerraform",
+        "States": {
+          "HasTerraform": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.stage.terraform",
+                "IsNull": false,
+                "Next": "Terraform"
+              }
+            ],
+            "Default": "Drivers"
+          },
+          "Terraform": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::codebuild:startBuild.sync",
+            "Parameters": {
+              "ProjectName": "${codebuild_project}",
+              "EnvironmentVariablesOverride": [
+                {
+                  "Name": "OPERATION_ID",
+                  "Type": "PLAINTEXT",
+                  "Value.$": "$.ctx.operation_id"
+                },
+                {
+                  "Name": "ENV_ID",
+                  "Type": "PLAINTEXT",
+                  "Value.$": "$.ctx.environment_id"
+                },
+                {
+                  "Name": "LEASE_ID",
+                  "Type": "PLAINTEXT",
+                  "Value.$": "$.ctx.lease_id"
+                },
+                {
+                  "Name": "ORG_ID",
+                  "Type": "PLAINTEXT",
+                  "Value.$": "$.ctx.org_id"
+                },
+                {
+                  "Name": "BLUEPRINT",
+                  "Type": "PLAINTEXT",
+                  "Value.$": "$.ctx.blueprint"
+                },
+                {
+                  "Name": "TF_STATE_KEY",
+                  "Type": "PLAINTEXT",
+                  "Value.$": "$.ctx.tf_state_key"
+                },
+                {
+                  "Name": "MODE",
+                  "Type": "PLAINTEXT",
+                  "Value.$": "$.stage.terraform.mode"
+                },
+                {
+                  "Name": "TF_VARS_JSON",
+                  "Type": "PLAINTEXT",
+                  "Value.$": "States.JsonToString($.stage.terraform.vars)"
+                },
+                {
+                  "Name": "ALLOWED_INSTANCES",
+                  "Type": "PLAINTEXT",
+                  "Value.$": "States.JsonToString($.stage.terraform.allowed_instances)"
+                },
+                {
+                  "Name": "ALLOW_DATA_LOSS",
+                  "Type": "PLAINTEXT",
+                  "Value.$": "States.Format('{}', $.ctx.allow_data_loss)"
+                }
+              ]
+            },
+            "ResultPath": null,
+            "Next": "Drivers",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "CodeBuild.AWSCodeBuildException"
+                ],
+                "IntervalSeconds": 10,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ]
+          },
+          "Drivers": {
+            "Type": "Map",
+            "ItemsPath": "$.stage.drivers",
+            "ItemSelector": {
+              "action.$": "$$.Map.Item.Value",
+              "ctx.$": "$.ctx"
+            },
+            "ItemProcessor": {
+              "ProcessorConfig": {
+                "Mode": "INLINE"
+              },
+              "StartAt": "Driver",
+              "States": {
+                "Driver": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::lambda:invoke",
+                  "Parameters": {
+                    "FunctionName": "${drivers_arn}",
+                    "Payload.$": "$"
+                  },
+                  "ResultSelector": {
+                    "result.$": "$.Payload"
+                  },
+                  "Retry": [
+                    {
+                      "ErrorEquals": [
+                        "Lambda.ServiceException",
+                        "Lambda.AWSLambdaException",
+                        "Lambda.SdkClientException",
+                        "Lambda.TooManyRequestsException"
+                      ],
+                      "IntervalSeconds": 2,
+                      "MaxAttempts": 3,
+                      "BackoffRate": 2
+                    }
+                  ],
+                  "End": true
+                }
+              }
+            },
+            "ResultPath": null,
+            "End": true
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Health",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "Blocked"
+        }
+      ]
+    },
+    "Health": {
+      "Type": "Map",
+      "ItemsPath": "$.plan.health",
+      "ItemSelector": {
+        "action.$": "$$.Map.Item.Value",
+        "ctx.$": "$.ctx"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "HealthStep",
+        "States": {
+          "HealthStep": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${drivers_arn}",
+              "Payload.$": "$"
+            },
+            "ResultSelector": {
+              "result.$": "$.Payload"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Post",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "HealthFailed"
+        }
+      ]
+    },
+    "Post": {
+      "Type": "Map",
+      "ItemsPath": "$.plan.post",
+      "ItemSelector": {
+        "action.$": "$$.Map.Item.Value",
+        "ctx.$": "$.ctx"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "PostStep",
+        "States": {
+          "PostStep": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${drivers_arn}",
+              "Payload.$": "$"
+            },
+            "ResultSelector": {
+              "result.$": "$.Payload"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Succeeded",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "Blocked"
+        }
+      ],
+      "MaxConcurrency": 1
+    },
+    "Succeeded": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${controller_arn}",
+        "Payload": {
+          "mode": "finish",
+          "status": "SUCCEEDED",
+          "operation_id.$": "$.ctx.operation_id"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Rekick",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 4,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "HealthFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${controller_arn}",
+        "Payload": {
+          "mode": "finish",
+          "status": "FAILED",
+          "operation_id.$": "$.ctx.operation_id",
+          "error.$": "$.error"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Rekick",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 4,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "Blocked": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${controller_arn}",
+        "Payload": {
+          "mode": "finish",
+          "status": "BLOCKED",
+          "operation_id.$": "$.ctx.operation_id",
+          "error.$": "$.error"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Rekick",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 4,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "Rekick": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${controller_arn}",
+        "InvocationType": "Event",
+        "Payload": {
+          "mode": "single",
+          "environment_id.$": "$.ctx.environment_id"
+        }
+      },
+      "ResultPath": null,
+      "End": true
+    }
+  }
+}

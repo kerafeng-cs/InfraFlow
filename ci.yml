@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Unit test (planner, model checker, validator, compiler, controller, API, executor)
+        working-directory: services
+        run: python -m unittest discover -s tests -t . -v
+      - name: Kiểm định ICS cho toàn bộ catalog (kiểm tĩnh + kiểm tra ghép + model checking)
+        working-directory: services
+        run: python -m infraflow.cli check
+      - name: catalog.json phải khớp YAML
+        working-directory: services
+        run: |
+          python -m infraflow.cli bundle
+          git diff --exit-code infraflow/catalog.json
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - run: terraform fmt -check -recursive components platform
+      - name: validate component
+        run: |
+          for d in components/*/*/; do
+            echo "== $d"; terraform -chdir="$d" init -backend=false -input=false >/dev/null && terraform -chdir="$d" validate
+          done
+      - name: validate platform
+        run: terraform -chdir=platform init -backend=false -input=false >/dev/null && terraform -chdir=platform validate

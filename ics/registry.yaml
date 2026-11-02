@@ -1,0 +1,66 @@
+# InfraFlow Component Standard v0.1: ba danh mục đóng (TD mục 4.1).
+# Mở rộng danh mục = phát hành phiên bản chuẩn mới.
+ics_version: "0.1"
+
+port_types:
+  net.vpc/v1:            [vpc_id, public_subnet_ids, private_subnet_ids, private_route_table_id]
+  net.egress/v1:         [nat_gateway_id]
+  db.postgres/v1:        [host, port, name, user, password_param, security_group_id]
+  http.backend/v1:       [instance_id, port, health_path, security_group_id]
+  http.public/v1:        [dns_name, zone_id]
+  workload.container/v1: [image, port, health_path]
+
+# Loại tài nguyên được phép, kèm lớp tính phí "thật" của nó (để kiểm S5).
+# class: lớp mà tài nguyên này ép component phải có (null = không ràng buộc).
+resource_types:
+  aws_vpc:                             { class: free }
+  aws_internet_gateway:                { class: free }
+  aws_subnet:                          { class: free }
+  aws_route_table:                     { class: free }
+  aws_route_table_association:         { class: free }
+  aws_route:                           { class: null }
+  aws_security_group:                  { class: null }
+  aws_vpc_security_group_ingress_rule: { class: null }
+  aws_vpc_security_group_egress_rule:  { class: null }
+  aws_eip:                             { class: hourly_no_data }
+  aws_nat_gateway:                     { class: hourly_no_data }
+  aws_lb:                              { class: hourly_no_data }
+  aws_lb_target_group:                 { class: null }
+  aws_lb_target_group_attachment:      { class: null }
+  aws_lb_listener:                     { class: null }
+  aws_instance:                        { class: stoppable }
+  aws_iam_role:                        { class: null }
+  aws_iam_role_policy:                 { class: null }
+  aws_iam_role_policy_attachment:      { class: null }
+  aws_iam_instance_profile:            { class: null }
+  aws_db_instance:                     { class: data, data: true }
+  aws_db_subnet_group:                 { class: null }
+  aws_ssm_parameter:                   { class: null }
+  aws_ebs_volume:                      { class: data, data: true }
+  random_password:                     { class: null }
+
+drivers:
+  - vpc.describe
+  - nat_gateway.describe
+  - ec2_instance.describe
+  - ec2_instance.start
+  - ec2_instance.stop
+  - ec2_instance.status_ok
+  - rds_instance.describe
+  - rds_instance.start
+  - rds_instance.stop
+  - rds_instance.snapshot
+  - rds_instance.available
+  - elbv2.describe
+  - elbv2.target_healthy
+  - dns.point
+  - wait.seconds
+  - terraform.presence
+  - terraform.restore
+
+# Lớp tính phí -> trạng thái hợp lệ (TD mục 4.3)
+classes:
+  free:           { states: [ABSENT, PRESENT],                        initial: PRESENT }
+  stoppable:      { states: [ABSENT, RUNNING, STOPPED],               initial: RUNNING }
+  hourly_no_data: { states: [ABSENT, PRESENT],                        initial: PRESENT }
+  data:           { states: [ABSENT, RUNNING, STOPPED, SNAPSHOTTED],  initial: RUNNING }

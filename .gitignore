@@ -1,0 +1,63 @@
+# ---------- Terraform ----------
+# State chứa ID tài nguyên và có thể chứa bí mật (mật khẩu RDS): KHÔNG BAO GIỜ commit
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+*.tfplan
+plan.out
+plan.json
+outputs.json
+validation.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# Biến sinh ra khi chạy (infraflow.local ghi đè mỗi giai đoạn)
+stage.auto.tfvars.json
+.infraflow-local.json
+# Biến chứa bí mật, nếu có, đặt tên *.secret.tfvars(.json)
+*.secret.tfvars
+*.secret.tfvars.json
+# Zip mã Lambda/CodeBuild do archive_file sinh ra
+platform/.build/
+# GIỮ LẠI .terraform.lock.hcl: ghim phiên bản provider (ICS mục 4.9 yêu cầu)
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------- Node ----------
+node_modules/
+
+# ---------- Bí mật, AWS ----------
+*.pem
+*.key
+.env
+.env.*
+.aws/
+credentials
+
+# ---------- Ghi chú cá nhân ----------
+.local.notes/
+
+# ---------- Hệ điều hành, editor ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+*:Zone.Identifier
+.idea/
+*.swp
+*~

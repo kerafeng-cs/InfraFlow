@@ -1,0 +1,53 @@
+ics_version: "0.1"
+component:
+  name: aws-rds-postgres
+  version: 1.0.0
+  owner: infraflow
+  summary: "PostgreSQL 16 trên RDS, single-AZ"
+  billing_class: data
+  data_class: persistent
+  resource_types:
+    - aws_db_instance
+    - aws_db_subnet_group
+    - aws_security_group
+    - aws_vpc_security_group_ingress_rule
+    - random_password
+    - aws_ssm_parameter
+  data_resource_types: [aws_db_instance]
+  primary_resource: aws_db_instance.this
+  system_inputs: [name_prefix, env_id]
+provides:
+  - port: db
+    type: db.postgres/v1
+    attributes: { host: endpoint_address, port: endpoint_port, name: db_name, user: db_user, password_param: password_ssm_name, security_group_id: security_group_id }
+requires:
+  - port: net
+    type: net.vpc/v1
+    when: present
+    inputs: { vpc_id: vpc_id, private_subnet_ids: subnet_ids }
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+outputs:
+  db_identifier:    { stable: true }
+  endpoint_address: { stable: true }
+  endpoint_port:    { stable: true }
+  security_group_id: { stable: true }
+lifecycle:
+  presence_variable: present
+  restore_variable: restore_from_snapshot
+  actions:
+    observe:  { driver: rds_instance.describe, target: db_identifier }
+    start:    { driver: rds_instance.start,    target: db_identifier }
+    stop:     { driver: rds_instance.stop,     target: db_identifier }
+    snapshot: { driver: rds_instance.snapshot, target: db_identifier }
+  levels: { awake: RUNNING, shallow: STOPPED, deep: STOPPED, hibernate: SNAPSHOTTED }
+  serving_states: [RUNNING]
+  quirks: [ { auto_start_after_days: 7 } ]
+health:
+  probe: { driver: rds_instance.available, target: db_identifier, timeout_s: 900 }
+cost:
+  - { meter: rds_instance_hour,    in_states: [RUNNING],          param: size }
+  - { meter: rds_storage_gb_month, in_states: [RUNNING, STOPPED], param: allocated_storage_gb }
+  - { meter: snapshot_gb_month,    in_states: [SNAPSHOTTED] }
+conformance:
+  claimed_level: L3
