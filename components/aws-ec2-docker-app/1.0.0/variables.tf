@@ -12,21 +12,21 @@ variable "size" {
 
   validation {
     condition     = contains(["small", "medium"], var.size)
-    error_message = "size phải là small hoặc medium."
+    error_message = "size must be small or medium."
   }
 }
 
-# Cổng requires "net" (net.vpc/v1, when: present)
+# Requires port "net" (net.vpc/v1, when: present)
 variable "vpc_id" {
   type = string
 }
 
 variable "subnet_ids" {
   type        = list(string)
-  description = "Private subnet; EC2 đặt ở subnet đầu tiên"
+  description = "Private subnets; the instance is placed in the first one"
 }
 
-# Cổng requires "db" (db.postgres/v1, when: serving)
+# Requires port "db" (db.postgres/v1, when: serving)
 variable "db_host" {
   type = string
 }
@@ -51,7 +51,7 @@ variable "db_security_group_id" {
   type = string
 }
 
-# Cổng requires "workload" (workload.container/v1) = cấu hình ứng dụng của Lease
+# Requires port "workload" (workload.container/v1): the Lease application settings
 variable "app_image" {
   type = string
 }

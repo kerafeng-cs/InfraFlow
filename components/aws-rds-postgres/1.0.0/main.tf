@@ -25,10 +25,16 @@ resource "aws_db_subnet_group" "this" {
 
 resource "aws_security_group" "db" {
   name        = "${var.name_prefix}-db"
-  description = "PostgreSQL cua ${var.name_prefix}"
+  description = "PostgreSQL for ${var.name_prefix}"
   vpc_id      = var.vpc_id
 
   tags = { Name = "${var.name_prefix}-db" }
+
+  lifecycle {
+    # Security group descriptions are immutable in EC2. Ignoring edits ensures that a wording
+    # change never replaces the group attached to a database that holds data.
+    ignore_changes = [description]
+  }
 }
 
 resource "aws_vpc_security_group_ingress_rule" "from_clients" {
@@ -61,8 +67,8 @@ resource "aws_db_instance" "this" {
 
   snapshot_identifier = var.restore_from_snapshot
 
-  # Snapshot do driver tạo và kiểm tra trước khi xóa (TD mục 11.3),
-  # nên Terraform không tự tạo final snapshot.
+  # The snapshot driver creates and verifies a snapshot before deletion,
+  # so Terraform does not take a final snapshot of its own.
   skip_final_snapshot      = true
   deletion_protection      = false
   backup_retention_period  = 0
@@ -72,8 +78,8 @@ resource "aws_db_instance" "this" {
   tags = { Name = "${var.name_prefix}-db" }
 
   lifecycle {
-    # Đổi snapshot_identifier sau khi đã khôi phục sẽ khiến Terraform xóa
-    # và tạo lại database. Chặn ở đây, và Plan Validator V4 chặn thêm lần nữa.
+    # Changing snapshot_identifier after a restore would make Terraform delete and
+    # recreate the database. Ignored here; Plan Validator rule V4 blocks it as well.
     ignore_changes = [snapshot_identifier]
   }
 }

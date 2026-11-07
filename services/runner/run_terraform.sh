@@ -1,6 +1,6 @@
 #!/bin/bash
-# Chạy trong CodeBuild cho MỘT giai đoạn Terraform của lifecycle plan (IC mục 10.2).
-#   biên dịch root module -> init (S3 + use_lockfile) -> plan -out -> Plan Validator -> apply đúng plan.out
+# Runs in CodeBuild for ONE Terraform stage of a lifecycle plan:
+#   compile the root module -> init (S3 with use_lockfile) -> plan -out -> Plan Validator -> apply exactly plan.out
 set -euo pipefail
 
 WORK=/tmp/work
@@ -27,7 +27,7 @@ else
 fi
 terraform show -json plan.out > plan.json
 
-# Snapshot đã có trong CHÍNH operation này (driver ghi vào DynamoDB) -> cho Validator V3
+# Snapshots taken by THIS operation (recorded in DynamoDB by the driver), for Validator rule V3
 SNAPS=$(aws dynamodb get-item --table-name "$OPERATIONS_TABLE" \
   --key "{\"operation_id\":{\"S\":\"$OPERATION_ID\"}}" --query 'Item.snapshots.M' --output json || echo null)
 SNAP_INSTANCES=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1] or "null") or {}; print(json.dumps(sorted(d)))' "$SNAPS")
@@ -45,11 +45,11 @@ cat validation.json
 aws s3 cp plan.json "$ART/plan.json" --only-show-errors || true
 aws s3 cp validation.json "$ART/validation.json" --only-show-errors || true
 if [ $RC -ne 0 ]; then
-  echo "PLAN_UNSAFE: Plan Validator từ chối, không apply."
+  echo "PLAN_UNSAFE: rejected by the Plan Validator; not applying."
   exit 3
 fi
 
 terraform apply -input=false -no-color plan.out
 terraform output -json > outputs.json || echo '{}' > outputs.json
 aws s3 cp outputs.json "$ART/outputs.json" --only-show-errors || true
-echo "== xong"
+echo "== done"

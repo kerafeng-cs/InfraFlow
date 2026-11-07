@@ -3,7 +3,7 @@ component:
   name: aws-network-basic
   version: 1.0.0
   owner: infraflow
-  summary: "VPC, 2 public + 2 private subnet ở 2 AZ"
+  summary: "VPC with two public and two private subnets in two Availability Zones"
   billing_class: free
   data_class: none
   resource_types:

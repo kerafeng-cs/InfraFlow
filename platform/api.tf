@@ -83,7 +83,7 @@ resource "aws_apigatewayv2_route" "private" {
   authorizer_id      = aws_apigatewayv2_authorizer.jwt.id
 }
 
-# Sleeping page: không cần đăng nhập (IC mục 7)
+# Sleeping page: no authentication
 resource "aws_apigatewayv2_route" "public" {
   for_each  = toset(["GET /v1/public/status", "POST /v1/public/wake"])
   api_id    = aws_apigatewayv2_api.this.id

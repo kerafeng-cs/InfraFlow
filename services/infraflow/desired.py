@@ -1,10 +1,11 @@
-"""Hàm Desired State D(e, t) (TD mục 10.2, IC mục 9.2).
+"""Desired State function D(e, t).
 
-Là hàm thuần: chỉ phụ thuộc Lease, Environment và thời điểm `now`, không có lịch hay bộ hẹn giờ ẩn.
-Vì vậy đổi chế độ hoạt động giữa kỳ thuê là an toàn: lượt sau tính lại từ đầu.
+D is pure: it depends only on the Lease, the Environment and `now`, with no hidden schedule or
+timer. Changing the operating mode in the middle of a Lease is therefore safe; the next
+evaluation starts from scratch.
 
-Giá trị trả về: (desired, source) với desired thuộc
-  "AWAKE" | "ASLEEP:<level>" | "RECLAIMED" | "UNREGISTERED" | None (BLOCKED: không tính).
+Returns (desired, source), where desired is one of
+  "AWAKE" | "ASLEEP:<level>" | "RECLAIMED" | "UNREGISTERED" | None (BLOCKED: not evaluated).
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ def _idle(policy: dict, env: dict, now: datetime) -> bool:
         return False
     if now - last <= timedelta(minutes=int(t)):
         return False
-    # Luật hòa vốn: NAT, ALB tính tròn giờ; chưa thức đủ min_awake thì chưa cho ngủ.
+    # Break-even rule: NAT and ALB bill by the started hour, so do not sleep before min_awake has elapsed.
     since = parse_ts(env.get("awake_since"))
     if since and now - since < timedelta(minutes=int(policy.get("min_awake_minutes", 60))):
         return False
@@ -71,18 +72,18 @@ def desired_state(lease: dict, env: dict, now: datetime) -> tuple:
     # 1. BLOCKED
     if env.get("blocked"):
         return None, None
-    # 2. hết hạn hoặc thu hồi sớm
+    # 2. expired or reclaimed early
     if (expires and now >= expires) or lease.get("reclaim_requested"):
         return "RECLAIMED", ("EXPIRY" if expires and now >= expires else "MANUAL")
     # 3. unregister
     if env.get("unregister_requested"):
         return "UNREGISTERED", "MANUAL"
-    # 4. thao tác tay còn hiệu lực
+    # 4. an unexpired manual override
     ov = env.get("override") or {}
     until = parse_ts(ov.get("until"))
     if ov.get("value") and (until is None or until > now):
         return ov["value"], ov.get("source", "MANUAL")
-    # 5. chưa tới ngày bắt đầu
+    # 5. before the start date
     off = f"ASLEEP:{policy['off_hours_level']}"
     idle = f"ASLEEP:{policy['idle_level']}"
     if starts and now < starts:
@@ -91,10 +92,10 @@ def desired_state(lease: dict, env: dict, now: datetime) -> tuple:
     mode = policy["mode"]
     if mode == "schedule":
         if in_schedule(policy, now):
-            # 6. lai: trong khung nhưng rảnh quá ngưỡng (và đã qua luật hòa vốn)
+            # 6. hybrid: inside the window but idle beyond the threshold (and past the break-even rule)
             if awake_now and _idle(policy, env, now):
                 return idle, "IDLE"
-            # Trong khung, đã ngủ vì rảnh: không tự thức lại cho tới khi có hoạt động/yêu cầu
+            # Inside the window and asleep because idle: stay asleep until activity or a wake request
             if not awake_now and env.get("idle_slept_at") and policy.get("idle_timeout_minutes"):
                 slept = parse_ts(env["idle_slept_at"])
                 last = parse_ts(env.get("last_activity_at"))
@@ -108,16 +109,16 @@ def desired_state(lease: dict, env: dict, now: datetime) -> tuple:
             return idle, "IDLE"  # 9
         return ("AWAKE" if awake_now else idle), "POLICY"  # 10
 
-    raise ValueError(f"chế độ lạ: {mode}")
+    raise ValueError(f"unknown mode: {mode}")
 
 
 def manual_override(value: str, now: datetime, policy: dict | None, source: str = "MANUAL") -> dict:
-    """Thao tác tay có thời hạn (TD mục 9.4)."""
+    """Manual override with an expiry."""
     policy = {**DEFAULT_POLICY, **(policy or {})}
     if value == "AWAKE":
         hours = 2 if source == "PUBLIC_URL" else int(policy.get("manual_wake_hours", 2))
         return {"value": value, "until": iso(now + timedelta(hours=hours)), "source": source}
-    # Ngủ tay: hiệu lực tới đầu khung thức kế tiếp (schedule) hoặc tới yêu cầu thức kế tiếp (on_demand)
+    # Manual sleep lasts until the next awake window (schedule) or the next wake request (on_demand)
     if policy["mode"] == "schedule":
         t = now
         for _ in range(8 * 24 * 4):

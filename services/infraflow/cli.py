@@ -1,11 +1,12 @@
-"""CLI của InfraFlow: python -m infraflow.cli <lệnh> ...
+"""InfraFlow CLI: python -m infraflow.cli <command> ...
 
-  check            kiểm tĩnh mọi component + kiểm tra ghép + model checking mọi Blueprint trong catalog
-  validate-blueprint FILE   kiểm một blueprint.yaml (Compose) dựa trên catalog hiện có
-  plan             in lifecycle plan giữa hai mức và kết quả model checking
-  compile          sinh root module Terraform (+ providers.tf, + levels/*.tfvars.json)
-  bundle           đóng gói catalog thành services/infraflow/catalog.json (cho Lambda, CodeBuild)
-  validate-plan    Plan Validator trên JSON của `terraform show -json`
+  check                     static checks for every component, plus composition checks and
+                            model checking for every Blueprint in the catalog
+  validate-blueprint FILE   check one blueprint.yaml against the current catalog
+  plan                      print the lifecycle plan between two levels and its model check result
+  compile                   generate the Terraform root module (with providers.tf and levels/*.tfvars.json)
+  bundle                    package the catalog as services/infraflow/catalog.json (for Lambda and CodeBuild)
+  validate-plan             run the Plan Validator on the JSON of `terraform show -json`
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ def _catalog(args):
 
 def _print_check(rep: dict) -> None:
     for c in rep["checks"]:
-        mark = "ĐẠT " if c["passed"] else "LỖI "
+        mark = "PASS" if c["passed"] else "FAIL"
         print(f"  [{mark}] {c['code']:<6} {c['name']}")
         if not c["passed"] and c.get("detail"):
             d = c["detail"]
@@ -43,11 +44,11 @@ def _print_check(rep: dict) -> None:
 def cmd_check(args) -> int:
     cat = _catalog(args)
     ok = True
-    print("== Kiểm tĩnh component (S1, S4-S7, F)")
+    print("== Component static checks (S1, S4-S7, F)")
     for ref, m in sorted(cat.components.items()):
         tf_dir = Path(args.root) / m["_dir"] if "_dir" in m and not getattr(args, "catalog", None) else None
         errs = static.check_component(m, cat.registry, tf_dir)
-        print(f"  {ref:<32} {'ĐẠT' if not errs else 'LỖI'}")
+        print(f"  {ref:<32} {'PASS' if not errs else 'FAIL'}")
         for e in errs:
             print(f"      {e['code']}: {e['message']}")
         ok &= not errs
@@ -61,14 +62,14 @@ def _check_bp(cat, bp, label) -> bool:
     print(f"-- {label}")
     errs = static.check_composition(bp, cat)
     for e in errs:
-        print(f"  [LỖI ] {e['code']:<6} {e['message']}")
+        print(f"  [FAIL] {e['code']:<6} {e['message']}")
     if errs:
         return False
-    print("  [ĐẠT ] C1-C6  kiểm tra ghép")
+    print("  [PASS] C1-C6  composition")
     g = build_graph(cat, blueprint=bp)
     rep = checker.check_blueprint(g)
     _print_check(rep)
-    print(f"  => {'ĐẠT' if rep['passed'] else 'KHÔNG ĐẠT'} ({rep['states_explored']} trạng thái đã duyệt)")
+    print(f"  => {'PASS' if rep['passed'] else 'FAIL'} ({rep['states_explored']} states explored)")
     return rep["passed"]
 
 
@@ -119,7 +120,7 @@ def cmd_bundle(args) -> int:
     cat = load_from_repo(args.root)
     dest = Path(args.out)
     dest.write_text(cat.to_json() + "\n", encoding="utf-8")
-    print(f"đã ghi {dest} ({len(cat.components)} component, {len(cat.blueprints)} blueprint)")
+    print(f"wrote {dest} ({len(cat.components)} components, {len(cat.blueprints)} blueprints)")
     return 0
 
 
@@ -137,8 +138,8 @@ def cmd_validate_plan(args) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="infraflow")
-    ap.add_argument("--root", default=str(REPO), help="thư mục gốc repo (đọc YAML)")
-    ap.add_argument("--catalog", help="dùng catalog.json thay vì đọc YAML")
+    ap.add_argument("--root", default=str(REPO), help="repository root (YAML sources)")
+    ap.add_argument("--catalog", help="use catalog.json instead of the YAML sources")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("check")

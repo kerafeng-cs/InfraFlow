@@ -1,0 +1,28 @@
+# Local development: PostgreSQL 16 plus the application, without TLS.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "app"]
+      interval: 2s
+      retries: 15
+  app:
+    build: .
+    environment:
+      DB_HOST: db
+      DB_NAME: app
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_SSL_MODE: disable
+      INFRAFLOW_ENV_ID: local
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy

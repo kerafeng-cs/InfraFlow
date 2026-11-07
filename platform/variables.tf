@@ -14,19 +14,19 @@ variable "prefix" {
 }
 
 variable "stage" {
-  description = "dev hoặc prod (TD mục 12.1)"
+  description = "dev or prod"
   type        = string
   default     = "dev"
 }
 
 variable "terraform_version" {
-  description = "Phiên bản Terraform chạy trong CodeBuild"
+  description = "Terraform version used in CodeBuild"
   type        = string
-  default     = "1.9.8"
+  default     = "1.10.5"
 }
 
-# Tên miền (tùy chọn). Chưa có thì URL môi trường là sleeping page trên CloudFront và
-# khi thức sẽ chuyển hướng sang địa chỉ ALB.
+# Domain name (optional). Without one, the environment URL is the sleeping page on CloudFront,
+# which redirects to the ALB address while the environment is awake.
 variable "domain" {
   type    = string
   default = null
@@ -38,7 +38,7 @@ variable "hosted_zone_id" {
 }
 
 variable "certificate_arn" {
-  description = "Chứng chỉ ACM wildcard *.domain ở ap-southeast-1 cho ALB của các Environment"
+  description = "Wildcard ACM certificate *.domain in ap-southeast-1 for the Environment ALBs"
   type        = string
   default     = null
 }

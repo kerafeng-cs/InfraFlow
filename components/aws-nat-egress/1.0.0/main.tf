@@ -1,5 +1,5 @@
-# Lớp hourly_no_data: NAT Gateway và Elastic IP tính tiền theo giờ, không có trạng thái stop.
-# Ngủ = xóa cả component (egress_present = false); thức = tạo lại.
+# Class hourly_no_data: a NAT Gateway and its Elastic IP are billed per hour and cannot be stopped.
+# Sleep removes the whole component (egress_present = false); wake recreates it.
 
 resource "aws_eip" "nat" {
   domain = "vpc"
@@ -18,8 +18,8 @@ resource "aws_nat_gateway" "this" {
   }
 }
 
-# Route nằm trong route table do network sở hữu, nhưng thuộc vòng đời của egress:
-# egress biến mất thì route cũng biến mất, không để lại route trỏ vào NAT đã xóa.
+# The route lives in a route table owned by network but follows the egress lifecycle:
+# when egress is removed the route goes with it, leaving no route to a deleted NAT.
 resource "aws_route" "private_default" {
   route_table_id         = var.private_route_table_id
   destination_cidr_block = "0.0.0.0/0"

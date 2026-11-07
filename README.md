@@ -1,82 +1,68 @@
 # InfraFlow
 
-Ngủ đông cho cả môi trường thử nghiệm trên AWS. Tài liệu thiết kế: Technical Design v3.0 và Interface Contracts v3.0.
+InfraFlow puts entire non-production environments on AWS to sleep and wakes them on demand, without losing data and without breaking the environment's URL.
+
+A typical staging environment (VPC, NAT Gateway, load balancer, application server, database) is billed around the clock but used during working hours. Stopping individual instances does not remove the hourly charges for NAT and the load balancer, and deleting resources by hand risks the database. InfraFlow treats the environment as one unit: it knows how each resource is billed, which resources depend on which, and in what order they can be removed, stopped, restored and started safely.
+
+## How it works
+
+| Concept | Meaning |
+|---|---|
+| Billing class | How a resource is billed: `free`, `stoppable` (EC2), `hourly_no_data` (NAT, ALB), `data` (RDS). The class determines what sleeping means for that resource. |
+| Level | A named target for the whole environment: `awake`, `deep` (stop compute, delete hourly resources), `hibernate` (snapshot the database, delete everything billable). |
+| Desired State | A pure function of the Lease (schedule, idle policy, manual overrides, expiry) and the current time. |
+| Reconciliation | The controller compares Desired State with the state observed in AWS, plans the transition, model-checks the plan, and executes it. |
+| Sleeping page | While asleep, the environment URL serves a static page that reports progress and lets visitors request a wake. DNS switches back to the application only after the health check passes. |
+
+Every plan is checked before execution: all interleavings of its parallel steps are explored, and the plan is rejected if any reachable state would serve traffic on a stopped dependency, delete data without a verified snapshot, or route users to an unhealthy application. Terraform plans are then validated against the component manifests before `apply`. See [docs/architecture.md](docs/architecture.md).
+
+## Repository layout
 
 ```
-components/   5 component ICS của web-db (Terraform + component.yaml)
-blueprints/   blueprint.yaml của catalog (web-db@1.0.0)
-ics/          registry.yaml (kiểu cổng, loại tài nguyên, driver) + ví dụ hỏng có chủ đích
-services/     mã Python: infraflow/ics (model, planner, checker, compiler, validator),
-              desired, controller, drivers, api, cost, local; runner/ cho CodeBuild; tests/
-platform/     Terraform của chính InfraFlow (DynamoDB, Lambda, Step Functions, CodeBuild, API, Cognito, web)
-web/          web quản lý + sleeping page (HTML/JS tĩnh)
-live/dev/     root module đã biên dịch cho môi trường thử tay dev-demo-qa
+apps/demo-app/   Reference workload: Node.js and PostgreSQL, used to verify data across Sleep and Wake
+components/      Terraform components with their InfraFlow manifests (component.yaml)
+blueprints/      Environment blueprints composed from components (web-db@1.0.0)
+ics/             Component standard registries and negative examples
+services/        Python core: model, planner, model checker, compiler, Plan Validator,
+                 controller, drivers, API; CodeBuild runner; tests
+platform/        Terraform for the InfraFlow platform itself (serverless)
+web/             Management console and sleeping page (static)
+live/dev/        Compiled root module for a manually operated development environment
+docs/            Architecture, component standard, deployment, acceptance criteria
 ```
 
-## 0. Chuẩn bị (WSL, một lần)
+## Quick start
+
+Requirements: Python 3.12, Terraform 1.10 or later, AWS CLI v2, Node.js 22.18 or later (demo app only).
 
 ```bash
-cd /mnt/c/Users/lelovo/Desktop/InfraFlow
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r services/requirements-dev.txt
+
+cd services
+python -m unittest discover -s tests -t .      # unit and end-to-end tests, no AWS access
+python -m infraflow.cli check                  # static, composition and model checks for the catalog
+python -m infraflow.cli plan --from deep --to awake
 ```
 
-## 1. Test và kiểm định
+Run a real environment from a workstation, without deploying the platform:
 
 ```bash
 cd services
-python -m unittest discover -s tests -t .          # 51 test
-python -m infraflow.cli check                      # kiểm tĩnh + kiểm tra ghép + model checking
-python -m infraflow.cli validate-blueprint ../ics/examples/web-db-shallow.blueprint.yaml   # phải KHÔNG ĐẠT (A2)
-python -m infraflow.cli plan --from deep --to awake   # in lifecycle plan + kết quả model check
-```
-
-Sửa component hoặc blueprint xong thì chạy lại `python -m infraflow.cli bundle` và
-`python -m infraflow.cli compile --components-rel ../../../components --out ../live/dev/web-db-manual --levels`.
-
-## 2. Việc A: ngủ/thức thật ở máy, không cần nền tảng
-
-```bash
-cd live/dev/web-db-manual
-terraform init
-# Kiểm tra main.tf biên dịch khớp state cũ: phải ra "No changes"
-terraform plan -var network_present=true -var egress_present=false -var database_present=true \
-               -var app_present=false -var entry_present=false
-
-cd ../../../services
 python -m infraflow.local status --dir ../live/dev/web-db-manual
-python -m infraflow.local go awake --dir ../live/dev/web-db-manual    # 10-20 phút, in URL ALB khi xong
-python -m infraflow.local go deep  --dir ../live/dev/web-db-manual    # ngủ sâu: xóa ALB, stop EC2, xóa NAT ∥ stop RDS
+python -m infraflow.local go awake --dir ../live/dev/web-db-manual
+python -m infraflow.local go deep  --dir ../live/dev/web-db-manual
 ```
 
-Mỗi lần `go`: quan sát AWS, sinh plan, model check, rồi mỗi giai đoạn chạy `terraform plan -out`, Plan Validator,
-`terraform apply plan.out` và các driver. **Xong buổi thì `go deep`**, đừng để NAT/ALB chạy qua đêm.
+Deploying the platform and creating Leases is described in [docs/deployment.md](docs/deployment.md).
 
-## 3. Dựng nền tảng (Việc B, C, D)
+## Documentation
 
-```bash
-cd platform
-terraform init
-terraform apply                       # khoảng 5 phút; in site_url, api_url, user_pool_id
-POOL=$(terraform output -raw user_pool_id)
-aws cognito-idp admin-create-user --profile infraflow --user-pool-id $POOL --username ban@email.com \
-  --user-attributes Name=email,Value=ban@email.com Name=email_verified,Value=true Name=custom:org_id,Value=org_nhom10 \
-  --temporary-password 'TamThoi123'
-aws cognito-idp admin-add-user-to-group --profile infraflow --user-pool-id $POOL --username ban@email.com --group-name infraflow_admins
-```
+- [Architecture](docs/architecture.md): state model, safety properties, control loop, platform services.
+- [Component standard](docs/component-standard.md): manifests, ports, registries and the checks applied to them.
+- [Deployment](docs/deployment.md): platform deployment, first Lease, local operation, cost notes.
+- [Acceptance criteria](docs/acceptance-criteria.md): failure scenarios and how each is handled.
 
-Mở `site_url`, đăng nhập (lần đầu đặt mật khẩu mới), tạo Lease. Tên Lease và Environment ngắn (ví dụ `nhom10` / `qa`)
-vì tên ALB tối đa 32 ký tự.
+## Scope
 
-Nền tảng toàn serverless nên gần như không tốn tiền khi không có Environment thức. Một Environment web-db đang thức
-tốn khoảng 0,15 USD/giờ (NAT + ALB + EC2 + RDS).
-
-Lỗi thường gặp: tài khoản free plan chặn một dịch vụ (CodeBuild, CloudFront...) thì `terraform apply` báo lỗi
-ở tài nguyên đó; ghi lại cho PoC S0.
-
-## 4. Trước khi commit
-
-```bash
-terraform fmt -recursive components platform     # không fmt thư mục live/: main.tf ở đó là đầu ra trình biên dịch
-cd services && python -m unittest discover -s tests -t .
-```
+InfraFlow currently manages environments it creates itself from certified blueprints, in a single AWS account and region (`ap-southeast-1`). Registering existing environments is not supported.

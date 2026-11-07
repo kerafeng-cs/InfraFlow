@@ -1,5 +1,5 @@
-"""Chạy executor.asl.json bằng một trình thông dịch ASL rút gọn (Map/Choice/Task/Catch/Retry)
-với plan thật do planner sinh, để bắt lỗi đường dẫn JSONPath, tham số CodeBuild, nhánh lỗi."""
+"""Runs executor.asl.json in a reduced ASL interpreter (Map, Choice, Task, Catch, Retry) with real
+plans from the planner, to catch JSONPath errors, CodeBuild parameter errors and broken error branches."""
 import json
 import re
 import unittest
@@ -131,7 +131,7 @@ class TestExecutor(unittest.TestCase):
         def cb(params):
             envs = {e["Name"]: e["Value"] for e in params["EnvironmentVariablesOverride"]}
             for v in envs.values():
-                self.assertIsInstance(v, str)  # CodeBuild chỉ nhận chuỗi
+                self.assertIsInstance(v, str)  # CodeBuild accepts strings only
             self.calls.append(("codebuild", params["ProjectName"], envs))
             return {}
 

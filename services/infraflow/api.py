@@ -1,7 +1,8 @@
-"""API quản lý + API công khai (IC mục 5, 7, 8). Lambda sau API Gateway HTTP API (payload 2.0).
+"""Management API and public API. A Lambda behind an API Gateway HTTP API (payload format 2.0).
 
-Nguyên tắc (TD mục 6): API chỉ kiểm tra quyền, dữ liệu, chống gửi lặp, GHI Desired State, trả operation_id.
-API không gọi Terraform hay thay đổi hạ tầng; việc đó thuộc controller.
+The API checks authorization, validates input, deduplicates requests, WRITES Desired State and
+returns an operation_id. It never runs Terraform or changes infrastructure; that is the
+controller's job.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from . import controller, cost, drivers
 from .desired import DEFAULT_POLICY, iso, manual_override, parse_ts
 from .ics import checker, static
 from .ics.catalog import load_bundle
+from .ics.compiler import DEFAULT_APP
 from .ics.model import build_graph
 from .store import LockError, VersionConflict, get_store
 
@@ -42,7 +44,7 @@ def _resp(status, body):
 
 
 # ---------------------------------------------------------------------------
-# Gọi controller (đường sự kiện) — bất đồng bộ
+# Controller invocation (event path), asynchronous
 # ---------------------------------------------------------------------------
 
 def _invoke_controller(env_id, op_id):
@@ -57,7 +59,7 @@ INVOKE = _invoke_controller
 
 
 # ---------------------------------------------------------------------------
-# Quyền
+# Authorization
 # ---------------------------------------------------------------------------
 
 def _principal(event):
@@ -76,33 +78,33 @@ def _principal(event):
 def _own_lease(store, me, lease_id):
     lease = store.get_lease(lease_id)
     if lease is None or (lease["org_id"] != me["org_id"] and not me["admin"]):
-        raise ApiError(404, "NOT_FOUND", "Lease không tồn tại")
+        raise ApiError(404, "NOT_FOUND", "Lease does not exist")
     return lease
 
 
 def _own_env(store, me, env_id):
     env = store.get_env(env_id)
     if env is None or (env["org_id"] != me["org_id"] and not me["admin"]):
-        raise ApiError(404, "NOT_FOUND", "Environment không tồn tại")
+        raise ApiError(404, "NOT_FOUND", "Environment does not exist")
     return env
 
 
 # ---------------------------------------------------------------------------
-# Chống gửi lặp (IC 2.4)
+# Request deduplication
 # ---------------------------------------------------------------------------
 
 def _idempotent(event, me, fn):
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
     key = headers.get("idempotency-key")
     if not key:
-        raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Thiếu header Idempotency-Key")
+        raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Missing Idempotency-Key header")
     store = get_store()
     scope = f"{me['org_id']}:{event['requestContext']['http']['method']}:{event['rawPath']}:{key}"
     digest = hashlib.sha256((event.get("body") or "").encode()).hexdigest()
     old = store.get_idem(scope)
     if old:
         if old["payload_sha256"] != digest:
-            raise ApiError(422, "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key đã dùng cho nội dung khác")
+            raise ApiError(422, "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key was already used with a different body")
         return old["status"], old["response"]
     status, body = fn()
     try:
@@ -114,7 +116,7 @@ def _idempotent(event, me, fn):
 
 
 # ---------------------------------------------------------------------------
-# Hiển thị
+# Presentation
 # ---------------------------------------------------------------------------
 
 def _availability(env):
@@ -181,12 +183,12 @@ def list_blueprints(event, me):
 
 
 def validate_blueprint(event, me):
-    """Compose: kiểm tĩnh + model checking ngay (vài giây), không chạy động."""
+    """Compose: static checks and model checking, synchronously (a few seconds); no dynamic verification."""
     cat = load_bundle()
     try:
         bp = json.loads(event.get("body") or "{}")
     except json.JSONDecodeError:
-        raise ApiError(400, "INVALID_REQUEST", "body phải là JSON của blueprint")
+        raise ApiError(400, "INVALID_REQUEST", "body must be a blueprint in JSON")
     errs = static.check_composition(bp, cat)
     report = {"composition": errs, "passed": not errs}
     if not errs:
@@ -202,18 +204,18 @@ def validate_blueprint(event, me):
 def _validate_policy(pol):
     pol = {**DEFAULT_POLICY, **(pol or {})}
     if pol["mode"] not in ("schedule", "on_demand"):
-        raise ApiError(400, "INVALID_REQUEST", "activity_policy.mode phải là schedule hoặc on_demand")
+        raise ApiError(400, "INVALID_REQUEST", "activity_policy.mode must be schedule or on_demand")
     if pol["mode"] == "on_demand" and not pol.get("idle_timeout_minutes"):
-        raise ApiError(400, "INVALID_REQUEST", "on_demand bắt buộc có idle_timeout_minutes")
+        raise ApiError(400, "INVALID_REQUEST", "on_demand requires idle_timeout_minutes")
     if pol["mode"] == "schedule":
         sch = pol.get("schedule") or {}
         if not re.match(r"^\d\d:\d\d$", sch.get("start", "")) or not re.match(r"^\d\d:\d\d$", sch.get("end", "")):
-            raise ApiError(400, "INVALID_REQUEST", "schedule.start/end dạng HH:MM")
+            raise ApiError(400, "INVALID_REQUEST", "schedule.start and schedule.end must be HH:MM")
     for k in ("off_hours_level", "idle_level"):
         if pol[k] not in ("deep", "hibernate"):
-            raise ApiError(400, "INVALID_REQUEST", f"{k} phải là deep hoặc hibernate")
+            raise ApiError(400, "INVALID_REQUEST", f"{k} must be deep or hibernate")
     if not 1 <= int(pol.get("manual_wake_hours", 2)) <= 8:
-        raise ApiError(400, "INVALID_REQUEST", "manual_wake_hours trong [1, 8]")
+        raise ApiError(400, "INVALID_REQUEST", "manual_wake_hours must be in [1, 8]")
     return pol
 
 
@@ -223,37 +225,37 @@ def create_lease(event, me):
         try:
             b = json.loads(event.get("body") or "{}")
         except json.JSONDecodeError:
-            raise ApiError(400, "INVALID_REQUEST", "body không phải JSON")
+            raise ApiError(400, "INVALID_REQUEST", "body is not JSON")
         name = b.get("name", "")
         if not LEASE_NAME.match(name):
-            raise ApiError(400, "INVALID_REQUEST", "name: chữ thường và số, 2-16 ký tự, bắt đầu bằng chữ")
+            raise ApiError(400, "INVALID_REQUEST", "name: 2-16 lowercase letters or digits, starting with a letter")
         envs = b.get("environments") or []
         if not envs or len(envs) > MAX_ENVS or len(set(envs)) != len(envs) or not all(ENV_NAME.match(e) for e in envs):
-            raise ApiError(400, "INVALID_REQUEST", f"environments: 1-{MAX_ENVS} tên khác nhau, chữ thường và số, tối đa 8 ký tự")
+            raise ApiError(400, "INVALID_REQUEST", f"environments: 1-{MAX_ENVS} distinct names of at most 8 lowercase letters or digits")
         cat = load_bundle()
         ref = b.get("blueprint_ref", "web-db@1.0.0")
         if ref not in cat.blueprints:
-            raise ApiError(400, "BLUEPRINT_NOT_CERTIFIED", f"blueprint {ref} không có trong catalog")
+            raise ApiError(400, "BLUEPRINT_NOT_CERTIFIED", f"blueprint {ref} is not in the catalog")
         starts, expires = parse_ts(b.get("starts_at")) or _now(), parse_ts(b.get("expires_at"))
         if expires is None or expires <= starts:
-            raise ApiError(400, "INVALID_REQUEST", "cần expires_at > starts_at")
+            raise ApiError(400, "INVALID_REQUEST", "expires_at must be later than starts_at")
         if expires - starts > timedelta(days=120):
-            raise ApiError(400, "ORG_LIMIT_EXCEEDED", "thời hạn tối đa 120 ngày")
+            raise ApiError(400, "ORG_LIMIT_EXCEEDED", "the maximum Lease duration is 120 days")
         size = (b.get("parameters") or {}).get("size", "small")
         if size not in ("small", "medium"):
-            raise ApiError(400, "INVALID_REQUEST", "size phải là small hoặc medium")
+            raise ApiError(400, "INVALID_REQUEST", "size must be small or medium")
         app = b.get("app") or {}
-        app = {"image": app.get("image", "public.ecr.aws/nginx/nginx:stable"), "port": int(app.get("port", 80)),
-               "health_path": app.get("health_path", "/")}
+        app = {"image": app.get("image", DEFAULT_APP["image"]), "port": int(app.get("port", DEFAULT_APP["port"])),
+               "health_path": app.get("health_path", DEFAULT_APP["health_path"])}
         if not app["health_path"].startswith("/") or not 1 <= app["port"] <= 65535:
-            raise ApiError(400, "INVALID_REQUEST", "app.port hoặc app.health_path không hợp lệ")
+            raise ApiError(400, "INVALID_REQUEST", "invalid app.port or app.health_path")
         dp = b.get("data_policy") or {}
         if "keep_final_backup" not in dp:
-            raise ApiError(400, "INVALID_REQUEST", "data_policy.keep_final_backup phải được xác nhận khi tạo Lease")
+            raise ApiError(400, "INVALID_REQUEST", "data_policy.keep_final_backup must be set explicitly when creating a Lease")
         policy = _validate_policy(b.get("activity_policy"))
         for e in envs:
             if store.find_env_by_host(f"{name}-{e}"):
-                raise ApiError(409, "NAME_TAKEN", f"{name}-{e} đã tồn tại")
+                raise ApiError(409, "NAME_TAKEN", f"{name}-{e} already exists")
 
         t = _now()
         lease_id = "ls_" + secrets.token_hex(5)
@@ -304,14 +306,16 @@ def extend_lease(event, me, lease_id):
     def do():
         store = get_store()
         l = _own_lease(store, me, lease_id)
+        if l.get("reclaim_requested") or parse_ts(l["expires_at"]) <= _now():
+            raise ApiError(409, "LEASE_EXPIRED", "Lease has expired or is being reclaimed; it can no longer be extended")
         b = json.loads(event.get("body") or "{}")
         exp = parse_ts(b.get("expires_at"))
         if exp is None or exp <= parse_ts(l["expires_at"]):
-            raise ApiError(400, "INVALID_REQUEST", "expires_at mới phải sau hạn hiện tại")
+            raise ApiError(400, "INVALID_REQUEST", "the new expires_at must be later than the current one")
         try:
             l2 = store.update_lease(lease_id, {"expires_at": iso(exp)}, expected_version=b.get("version"))
         except VersionConflict:
-            raise ApiError(409, "VERSION_CONFLICT", "Lease đã bị sửa, tải lại rồi thử lại")
+            raise ApiError(409, "VERSION_CONFLICT", "Lease was modified; reload and retry")
         return 200, {"lease_id": lease_id, "expires_at": l2["expires_at"], "version": l2["version"]}
 
     return _idempotent(event, me, do)
@@ -325,8 +329,8 @@ def put_activity_policy(event, me, lease_id):
     try:
         l2 = store.update_lease(lease_id, {"activity_policy": pol}, expected_version=b.get("version"))
     except VersionConflict:
-        raise ApiError(409, "VERSION_CONFLICT", "Lease đã bị sửa, tải lại rồi thử lại")
-    # Bật chế độ ngủ khi rảnh: ân hạn, không ngủ ngay (TD 9.5)
+        raise ApiError(409, "VERSION_CONFLICT", "Lease was modified; reload and retry")
+    # Enabling idle sleep grants a grace period instead of sleeping immediately
     if pol.get("idle_timeout_minutes"):
         for e in store.list_envs(lease_id):
             store.update_env(e["environment_id"], {"last_activity_at": iso(_now())})
@@ -339,7 +343,7 @@ def reclaim_lease(event, me, lease_id):
         _own_lease(store, me, lease_id)
         b = json.loads(event.get("body") or "{}")
         if b.get("confirm") is not True:
-            raise ApiError(400, "CONFIRMATION_REQUIRED", "Thu hồi sớm cần confirm = true")
+            raise ApiError(400, "CONFIRMATION_REQUIRED", "early reclaim requires confirm = true")
         store.update_lease(lease_id, {"reclaim_requested": True})
         ops = []
         for e in store.list_envs(lease_id):
@@ -382,22 +386,22 @@ def get_env(event, me, env_id):
 
 
 def _request_state(env, lease, value, me, source):
-    """Thao tác tay: ghi override có thời hạn; xung đột theo TD 10.4."""
+    """Manual action: writes an override with an expiry; conflicts are resolved against the active operation."""
     store = get_store()
     t = _now()
     if lease.get("reclaim_requested") or parse_ts(lease["expires_at"]) <= t:
-        raise ApiError(409, "LEASE_EXPIRED", "Lease đã hết hạn hoặc đang thu hồi")
+        raise ApiError(409, "LEASE_EXPIRED", "Lease has expired or is being reclaimed")
     if env.get("blocked"):
-        raise ApiError(409, "ENVIRONMENT_BLOCKED", "Environment đang BLOCKED, cần admin xử lý")
+        raise ApiError(409, "ENVIRONMENT_BLOCKED", "Environment is BLOCKED and requires an administrator")
     if env.get("status") in ("RECLAIMED", "VERIFYING"):
-        raise ApiError(409, "LEASE_EXPIRED", "Environment đã thu hồi")
+        raise ApiError(409, "LEASE_EXPIRED", "Environment has been reclaimed")
     active = env.get("active_operation_id")
     want_awake = value == "AWAKE"
     if active:
         op = store.get_op(active) or {}
         if (op.get("target_level") == "awake") == want_awake:
             return 202, {"operation_id": active, "status": op.get("status"), "existing": True}
-        raise ApiError(409, "CONCURRENT_OPERATION", "Đang có thao tác ngược mục tiêu, chờ nó xong",
+        raise ApiError(409, "CONCURRENT_OPERATION", "an operation with the opposite target is running; wait for it to finish",
                        {"operation_id": active})
     ov = manual_override(value, t, lease.get("activity_policy"), source=source)
     store.update_env(env["environment_id"], {"override": ov, "last_activity_at": iso(t)})
@@ -426,7 +430,7 @@ def sleep_env(event, me, env_id):
         b = json.loads(event.get("body") or "{}")
         level = b.get("level") or (lease.get("activity_policy") or {}).get("off_hours_level", "deep")
         if level not in ("deep", "hibernate"):
-            raise ApiError(400, "INVALID_REQUEST", "level phải là deep hoặc hibernate")
+            raise ApiError(400, "INVALID_REQUEST", "level must be deep or hibernate")
         return _request_state(env, lease, f"ASLEEP:{level}", me, "MANUAL")
 
     return _idempotent(event, me, do)
@@ -449,27 +453,28 @@ def get_operation(event, me, op_id):
     store = get_store()
     op = store.get_op(op_id)
     if op is None:
-        raise ApiError(404, "NOT_FOUND", "operation không tồn tại")
+        raise ApiError(404, "NOT_FOUND", "operation does not exist")
     _own_env(store, me, op["environment_id"])
     return 200, _op_view(op)
 
 
 # ---------------------------------------------------------------------------
-# API công khai cho sleeping page (IC mục 7): không lộ ID tài nguyên, lỗi chi tiết hay operation_id
+# Public API for the sleeping page: exposes no resource IDs, error details or operation IDs
 # ---------------------------------------------------------------------------
 
-STEP_LABELS = {"up-1": "Đang tạo cổng ra Internet và khởi động cơ sở dữ liệu", "up-2": "Đang khởi động ứng dụng",
-               "up-3": "Đang tạo cổng vào", "health": "Đang kiểm tra ứng dụng", "up-0": "Đang dựng mạng"}
+STEP_LABELS = {"up-0": "Creating the network", "up-1": "Creating Internet egress and starting the database",
+               "up-2": "Starting the application", "up-3": "Creating the entry point",
+               "health": "Checking the application"}
 
 
 def _public_env(host):
     store = get_store()
     env = store.find_env_by_host(host or "")
     if env is None:
-        raise ApiError(404, "NOT_FOUND", "Môi trường không tồn tại hoặc đã hết hạn")
+        raise ApiError(404, "NOT_FOUND", "Environment does not exist or has expired")
     lease = store.get_lease(env["lease_id"])
     if env.get("status") == "RECLAIMED":
-        raise ApiError(404, "NOT_FOUND", "Môi trường không tồn tại hoặc đã hết hạn")
+        raise ApiError(404, "NOT_FOUND", "Environment does not exist or has expired")
     return store, env, lease
 
 
@@ -487,7 +492,7 @@ def public_status(event, me):
     if avail == "WAKING":
         op = store.get_op(env["active_operation_id"]) or {}
         stages = [s["name"] for s in (op.get("plan") or {}).get("stages", [])]
-        progress = {"stages": [STEP_LABELS.get(s, s) for s in stages] + ["Đang kiểm tra ứng dụng"]}
+        progress = {"stages": [STEP_LABELS.get(s, s) for s in stages] + ["Checking the application"]}
     return 200, {"environment_name": env["name"], "lease_name": lease["name"], "availability": avail,
                  "can_wake": can_wake, "app_url": env.get("app_url") if avail == "AWAKE" else None,
                  "progress": progress, "expires_at": lease["expires_at"]}
@@ -499,7 +504,7 @@ def public_wake(event, me):
     t = _now()
     last = parse_ts(env.get("public_wake_at"))
     if last and t - last < timedelta(seconds=30):
-        raise ApiError(429, "RATE_LIMITED", "Vui lòng chờ ít phút rồi thử lại")
+        raise ApiError(429, "RATE_LIMITED", "Please wait a moment and try again")
     store.update_env(env["environment_id"], {"public_wake_at": iso(t)})
     status, body = _request_state(env, lease, "AWAKE", {"sub": "public-url"}, "PUBLIC_URL")
     return 202, {"accepted": True}
@@ -511,7 +516,7 @@ def public_wake(event, me):
 
 def _admin(me):
     if not me["admin"]:
-        raise ApiError(403, "FORBIDDEN", "chỉ admin")
+        raise ApiError(403, "FORBIDDEN", "administrators only")
 
 
 def admin_blocked(event, me):
@@ -526,7 +531,7 @@ def admin_resolve(event, me, env_id):
     if b.get("action") not in ("retry", "mark_resolved", "force_cleanup"):
         raise ApiError(400, "INVALID_REQUEST", "action: retry | mark_resolved | force_cleanup")
     if not b.get("note"):
-        raise ApiError(400, "INVALID_REQUEST", "bắt buộc ghi note")
+        raise ApiError(400, "INVALID_REQUEST", "note is required")
     env = store.get_env(env_id)
     fields = {"blocked": False, "resolved": {"by": me["sub"], "action": b["action"], "note": b["note"], "at": iso(_now())}}
     remove = ["blocked_reason"]
@@ -545,7 +550,7 @@ def admin_orphans(event, me):
 
 
 # ---------------------------------------------------------------------------
-# Định tuyến
+# Routing
 # ---------------------------------------------------------------------------
 
 ROUTES = [
@@ -586,8 +591,8 @@ def handler(event, context=None):
                 me = _principal(event) if auth else {"sub": "public", "org_id": None, "admin": False}
                 status, body = fn(event, me, *match.groups())
                 return _resp(status, body)
-        raise ApiError(404, "NOT_FOUND", f"không có route {method} {path}")
+        raise ApiError(404, "NOT_FOUND", f"no route for {method} {path}")
     except ApiError as e:
         return _resp(e.status, {"error": {"code": e.code, "message": e.message, "details": e.details}})
     except json.JSONDecodeError:
-        return _resp(400, {"error": {"code": "INVALID_REQUEST", "message": "body không phải JSON"}})
+        return _resp(400, {"error": {"code": "INVALID_REQUEST", "message": "body is not JSON"}})

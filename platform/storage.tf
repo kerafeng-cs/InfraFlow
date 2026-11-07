@@ -1,4 +1,4 @@
-# ---------- S3: Terraform state của từng Environment + artifact của operation ----------
+# ---------- S3: per-Environment Terraform state and operation artifacts ----------
 resource "aws_s3_bucket" "state" {
   bucket_prefix = "${local.p}-tfstate-"
   force_destroy = false
@@ -46,7 +46,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
   }
 }
 
-# ---------- Mã cho CodeBuild: code.zip (services) + components.zip ----------
+# ---------- CodeBuild sources: code.zip (services) and components.zip ----------
 data "archive_file" "code" {
   type        = "zip"
   source_dir  = "${path.module}/../services"

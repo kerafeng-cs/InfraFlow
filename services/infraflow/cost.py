@@ -1,7 +1,7 @@
-"""Ba kịch bản chi phí trên cùng khoảng [from, to) (TD mục 13).
+"""Three cost scenarios over the same interval [from, to).
 
-Đơn giá là ƯỚC TÍNH cho ap-southeast-1 (USD), dùng để so sánh tương đối giữa ba kịch bản;
-chi phí thật lấy từ Cost Explorer theo tag. Cập nhật bảng giá khi lấy số liệu ở PoC S0.
+Unit prices are ESTIMATES for ap-southeast-1 in USD, used to compare the scenarios with each
+other. Actual cost comes from Cost Explorer, filtered by tag.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ PRICES = {
     "ebs_hour": 30 * 0.096 / 730,
     "snapshot_hour": 20 * 0.095 / 730,
 }
-ROUNDED = {"egress", "entry"}  # tính tròn giờ cho mỗi khoảng tồn tại liên tục
+ROUNDED = {"egress", "entry"}  # billed by the started hour for each continuous interval of existence
 
 
 def hourly(instance: str, state: str, size: str) -> float:
@@ -49,7 +49,7 @@ AWAKE = {"network": "PRESENT", "egress": "PRESENT", "database": "RUNNING", "app"
 
 
 def _intervals(log: list, initial: dict, start: datetime, end: datetime):
-    """Từ nhật ký chuyển trạng thái -> {instance: [(t0, t1, state)]}."""
+    """Transition log -> {instance: [(t0, t1, state)]}."""
     state = dict(initial)
     cur_t = start
     out = {u: [] for u in state}
@@ -66,7 +66,7 @@ def _intervals(log: list, initial: dict, start: datetime, end: datetime):
         cur_t = at
     for u in state:
         out[u].append((cur_t, end, state[u]))
-    # gộp khoảng liền nhau cùng trạng thái
+    # merge adjacent intervals with the same state
     for u in out:
         merged = []
         for t0, t1, s in out[u]:
@@ -99,7 +99,7 @@ def scenarios(log: list, start: datetime, end: datetime, size: str = "small", po
     real = _intervals(log, initial, start, end)
     always = {u: [(start, end, s)] for u, s in AWAKE.items()}
 
-    # Chỉ stop EC2/RDS theo lịch (với on_demand thì dùng lịch tham chiếu mặc định)
+    # Scheduled stop of EC2 and RDS only (on_demand uses the default reference schedule)
     ref = policy if policy.get("schedule") else DEFAULT_POLICY
     stop_only = {u: [] for u in AWAKE}
     t = start
@@ -111,7 +111,7 @@ def scenarios(log: list, start: datetime, end: datetime, size: str = "small", po
             st = s if (on or u in ("network", "egress", "entry")) else "STOPPED"
             stop_only[u].append((t, t2, st))
         t = t2
-    for u in stop_only:  # gộp
+    for u in stop_only:  # merge
         merged = []
         for seg in stop_only[u]:
             if merged and merged[-1][2] == seg[2] and merged[-1][1] == seg[0]:

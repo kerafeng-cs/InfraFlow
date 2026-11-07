@@ -3,7 +3,7 @@ component:
   name: aws-nat-egress
   version: 1.0.0
   owner: infraflow
-  summary: "NAT Gateway một AZ cho private subnet"
+  summary: "Single-AZ NAT Gateway for the private subnets"
   billing_class: hourly_no_data
   data_class: none
   resource_types: [aws_eip, aws_nat_gateway, aws_route]
@@ -21,7 +21,7 @@ requires:
     inputs: { public_subnet_ids: public_subnet_ids, private_route_table_id: private_route_table_id }
 parameters: {}
 outputs:
-  nat_gateway_id: { stable: false }   # đổi sau mỗi lần thức
+  nat_gateway_id: { stable: false }   # changes on every wake
   public_ip:      { stable: false }
 lifecycle:
   presence_variable: present

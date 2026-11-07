@@ -1,4 +1,4 @@
-"""Luồng end-to-end không cần AWS: API -> controller -> (executor giả) -> finish."""
+"""End-to-end flow without AWS: API -> controller -> (fake executor) -> finish."""
 import json
 import os
 import unittest
@@ -8,7 +8,7 @@ from infraflow import api, controller, drivers
 from infraflow.ics.model import build_graph
 from infraflow.store import MemoryStore, set_store
 
-T0 = datetime(2026, 11, 2, 2, 0, tzinfo=timezone.utc)  # 09:00 thứ Hai giờ VN
+T0 = datetime(2026, 11, 2, 2, 0, tzinfo=timezone.utc)  # 09:00 Monday local time
 
 
 class FakeSFN:
@@ -43,7 +43,7 @@ class Flow(unittest.TestCase):
         self.invoked = []
         api.INVOKE = lambda env_id, op_id: self.invoked.append((env_id, op_id))
         self.graph = build_graph(controller.catalog(), "web-db@1.0.0")
-        self.world = {}  # trạng thái hạ tầng giả theo env
+        self.world = {}  # fake infrastructure state per environment
 
     def tearDown(self):
         controller._NOW = None
@@ -71,7 +71,7 @@ class Flow(unittest.TestCase):
                                   "error": {"Error": "X", "Cause": "health"} if status != "SUCCEEDED" else None})
 
     def create(self, **over):
-        body = {"name": "congtyb", "environments": ["dev", "qa"], "blueprint_ref": "web-db@1.0.0",
+        body = {"name": "acme", "environments": ["dev", "qa"], "blueprint_ref": "web-db@1.0.0",
                 "expires_at": "2027-01-01T00:00:00Z", "starts_at": "2026-11-01T00:00:00Z",
                 "data_policy": {"keep_final_backup": True},
                 "activity_policy": {"mode": "schedule", "utc_offset_minutes": 420,
@@ -86,7 +86,7 @@ class Flow(unittest.TestCase):
         self.assertEqual(len(self.invoked), 2)
         env_id, op_id = self.invoked[0]
 
-        # Trong giờ làm: desired AWAKE -> wake từ con số 0
+        # Working hours: desired AWAKE -> wake from nothing
         r = self.run_controller(env_id, op_id)
         self.assertEqual((r["result"], r["action"]), ("started", "WAKE"))
         ex = self.sfn.started[-1]
@@ -97,12 +97,12 @@ class Flow(unittest.TestCase):
         self.assertEqual(stages[0]["terraform"]["vars"]["egress_present"], False)
         self.assertTrue(ex["input"]["plan"]["model_check"]["passed"])
 
-        # Đang chạy: controller không khởi chạy thêm
+        # Running: the controller does not start another operation
         self.assertEqual(self.run_controller(env_id)["result"], "busy")
-        # Thao tác tay ngược mục tiêu -> 409
+        # Manual action with the opposite target -> 409
         st, b = self.call("POST", f"/v1/environments/{env_id}/sleep", {}, key="s1")
         self.assertEqual((st, b["error"]["code"]), (409, "CONCURRENT_OPERATION"))
-        # Cùng mục tiêu -> trả operation đang chạy
+        # Same target -> returns the running operation
         st, b = self.call("POST", f"/v1/environments/{env_id}/wake", {}, key="w1")
         self.assertEqual((st, b["operation_id"], b["existing"]), (202, op_id, True))
 
@@ -112,12 +112,12 @@ class Flow(unittest.TestCase):
         self.assertNotIn("active_operation_id", env)
         self.assertEqual(self.run_controller(env_id)["result"], "in_sync")
 
-        # Public status khi thức
+        # Public status while awake
         st, b = self.call("GET", "/v1/public/status", query={"host": env_id})
         self.assertEqual((b["availability"], b["app_url"]), ("AWAKE", "http://alb.example"))
         self.assertNotIn("operation_id", json.dumps(b))
 
-        # Ngủ tay -> deep
+        # Manual sleep -> deep
         st, b = self.call("POST", f"/v1/environments/{env_id}/sleep", {}, key="s2")
         self.assertEqual(st, 202)
         r = self.run_controller(env_id, b["operation_id"])
@@ -127,13 +127,13 @@ class Flow(unittest.TestCase):
         self.complete_last()
         self.assertEqual(self.store.get_env(env_id)["actual"], "ASLEEP:deep")
 
-        # Sleeping page bấm thức
+        # Wake request from the sleeping page
         st, b = self.call("POST", "/v1/public/wake", {"host": env_id})
         self.assertEqual(st, 202)
         st, b = self.call("POST", "/v1/public/wake", {"host": env_id})
-        self.assertEqual(st, 429)  # giới hạn tần suất
+        self.assertEqual(st, 429)  # rate limited
 
-        # Nhật ký trạng thái -> chi phí 3 kịch bản
+        # Transition log -> three cost scenarios
         controller._NOW = T0 + timedelta(hours=5)
         st, b = self.call("GET", f"/v1/leases/{body['lease_id']}/cost")
         self.assertEqual(st, 200)
@@ -149,7 +149,7 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.sfn.started[-1]["input"]["plan"]["to"]["database"], "ABSENT")
         self.complete_last()
         self.assertEqual(self.store.get_env(env_id)["status"], "PREPARED")
-        self.assertEqual(self.run_controller(env_id)["result"], "in_sync")  # PREPARED thỏa ASLEEP
+        self.assertEqual(self.run_controller(env_id)["result"], "in_sync")  # PREPARED satisfies ASLEEP
 
     def test_health_failure_puts_back_to_sleep(self):
         self.create()
@@ -172,21 +172,21 @@ class Flow(unittest.TestCase):
         self.assertEqual(b["error"]["code"], "ENVIRONMENT_BLOCKED")
         st, b = self.call("GET", "/v1/admin/blocked", admin=True)
         self.assertEqual(len(b["items"]), 1)
-        st, b = self.call("POST", f"/v1/admin/environments/{env_id}/resolve", {"action": "retry", "note": "đã sửa quota"}, admin=True)
+        st, b = self.call("POST", f"/v1/admin/environments/{env_id}/resolve", {"action": "retry", "note": "quota fixed"}, admin=True)
         self.assertEqual(st, 200)
         self.assertFalse(self.store.get_env(env_id)["blocked"])
 
     def test_drift_is_corrected_by_reconcile(self):
-        """Ai đó bật EC2 trên console khi môi trường đang ngủ -> vòng đối soát đưa về."""
+        """An instance started from the console while the environment sleeps is put back by reconciliation."""
         self.create()
         env_id, op_id = self.invoked[0]
         self.run_controller(env_id, op_id)
         self.complete_last()
-        controller._NOW = T0 + timedelta(hours=12)  # ngoài giờ
+        controller._NOW = T0 + timedelta(hours=12)  # outside working hours
         self.run_controller(env_id)
         self.complete_last()
         self.assertEqual(self.store.get_env(env_id)["actual"], "ASLEEP:deep")
-        self.world[env_id]["app"] = "RUNNING"  # trôi lệch
+        self.world[env_id]["app"] = "RUNNING"  # drift
         r = self.run_controller(env_id)
         self.assertEqual(r["action"], "SLEEP")
         p = self.sfn.started[-1]["input"]["plan"]
@@ -219,6 +219,48 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.run_controller(env_id)["result"], "reclaimed")
         self.assertEqual(self.store.get_env(env_id)["status"], "RECLAIMED")
 
+    def _reclaimed_with_leftovers(self, left):
+        self.create()
+        env_id, op_id = self.invoked[0]
+        self.run_controller(env_id, op_id)
+        self.complete_last()
+        controller._NOW = datetime(2027, 1, 2, tzinfo=timezone.utc)
+        self.run_controller(env_id)
+        self.complete_last()
+
+        class Tagging:
+            def get_resources(self, **kw):
+                return {"ResourceTagMappingList": [{"ResourceARN": a, "Tags": []} for a in left]}
+
+        drivers.set_clients({"stepfunctions": self.sfn, "resourcegroupstaggingapi": Tagging()})
+        return env_id
+
+    def test_verify_blocks_when_resources_remain(self):
+        env_id = self._reclaimed_with_leftovers(["arn:aws:ec2:x:1:natgateway/nat-1"])
+        results = [self.run_controller(env_id)["result"] for _ in range(controller.VERIFY_MAX_ATTEMPTS)]
+        self.assertEqual(results[:-1], ["verifying"] * (controller.VERIFY_MAX_ATTEMPTS - 1))
+        self.assertEqual(results[-1], "blocked")
+        env = self.store.get_env(env_id)
+        self.assertEqual(env["blocked_reason"]["code"], "VERIFY_FAILED")
+        self.assertNotEqual(env.get("status"), "RECLAIMED")
+
+    def test_operation_past_deadline_blocks_with_unknown_outcome(self):
+        self.create()
+        env_id, op_id = self.invoked[0]
+        self.run_controller(env_id, op_id)
+        self.assertEqual(self.run_controller(env_id)["result"], "busy")
+        controller._NOW = T0 + timedelta(minutes=controller.OP_TIMEOUT["WAKE"] + 1)
+        r = self.run_controller(env_id)
+        self.assertEqual((r["result"], r["code"]), ("blocked", "UNKNOWN_OUTCOME"))
+
+    def test_extend_rejected_once_reclaim_started(self):
+        st, b = self.create()
+        lease = self.store.get_lease(b["lease_id"])
+        controller._NOW = datetime(2027, 1, 2, tzinfo=timezone.utc)
+        st, body = self.call("POST", f"/v1/leases/{b['lease_id']}/extend",
+                             {"expires_at": "2027-02-01T00:00:00Z", "version": lease["version"]}, key="k-ext")
+        self.assertEqual((st, body["error"]["code"]), (409, "LEASE_EXPIRED"))
+
     def test_validation_and_idempotency(self):
         st, b = self.create(name="X")
         self.assertEqual(st, 400)
@@ -226,7 +268,7 @@ class Flow(unittest.TestCase):
         self.assertEqual(b["error"]["code"], "INVALID_REQUEST")
         st1, b1 = self.create()
         st2, b2 = self.create()
-        self.assertEqual((st2, b2), (st1, b1))  # cùng Idempotency-Key, cùng nội dung
+        self.assertEqual((st2, b2), (st1, b1))  # same Idempotency-Key, same body
         st3, b3 = self.create(environments=["uat"])
         self.assertEqual(b3["error"]["code"], "IDEMPOTENCY_KEY_REUSED")
 

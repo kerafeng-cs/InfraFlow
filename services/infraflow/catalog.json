@@ -42,7 +42,7 @@
    "blueprint": {
     "name": "web-db",
     "owner": "infraflow",
-    "summary": "Web app (Docker trên EC2) + PostgreSQL + ALB",
+    "summary": "Web application (Docker on EC2) with PostgreSQL behind an ALB",
     "version": "1.0.0"
    },
    "ics_version": "0.1",
@@ -105,7 +105,7 @@
      "aws_vpc_security_group_ingress_rule",
      "aws_vpc_security_group_egress_rule"
     ],
-    "summary": "ALB công khai ở 2 public subnet; HTTPS khi có chứng chỉ",
+    "summary": "Public ALB in two public subnets; HTTPS when a certificate is set",
     "system_inputs": [
      "name_prefix",
      "certificate_arn"
@@ -218,7 +218,7 @@
      "aws_iam_role_policy_attachment",
      "aws_iam_instance_profile"
     ],
-    "summary": "EC2 Amazon Linux 2023 ở private subnet chạy một Docker image",
+    "summary": "Amazon Linux 2023 EC2 instance in a private subnet running one Docker image",
     "system_inputs": [
      "name_prefix",
      "env_id"
@@ -365,7 +365,7 @@
      "aws_nat_gateway",
      "aws_route"
     ],
-    "summary": "NAT Gateway một AZ cho private subnet",
+    "summary": "Single-AZ NAT Gateway for the private subnets",
     "system_inputs": [
      "name_prefix"
     ],
@@ -458,7 +458,7 @@
      "aws_route",
      "aws_route_table_association"
     ],
-    "summary": "VPC, 2 public + 2 private subnet ở 2 AZ",
+    "summary": "VPC with two public and two private subnets in two Availability Zones",
     "system_inputs": [
      "name_prefix"
     ],
@@ -532,7 +532,7 @@
      "random_password",
      "aws_ssm_parameter"
     ],
-    "summary": "PostgreSQL 16 trên RDS, single-AZ",
+    "summary": "PostgreSQL 16 on RDS, single-AZ",
     "system_inputs": [
      "name_prefix",
      "env_id"

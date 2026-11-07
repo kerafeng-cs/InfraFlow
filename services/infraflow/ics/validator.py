@@ -1,10 +1,10 @@
-"""Plan Validator (TD mục 11.2): chạy giữa `terraform plan -out=plan.out` và `terraform apply plan.out`.
+"""Plan Validator: runs between `terraform plan -out=plan.out` and `terraform apply plan.out`.
 
-Đầu vào: JSON của `terraform show -json plan.out`.
-Đầu ra: {"passed": bool, "plan_sha256": ..., "violations": [{"rule", "address", "reason"}]}.
+Input: the JSON of `terraform show -json plan.out`.
+Output: {"passed": bool, "plan_sha256": ..., "violations": [{"rule", "address", "reason"}]}.
 
-Luật cài đặt ở đây: V1, V2, V3, V4, V5, V6, V8, V9.
-(V7 do model checker đảm nhận trước khi giao plan; V10-V12 thuộc mức C/D.)
+Rules implemented here: V1, V2, V3, V4, V5, V6, V8, V9.
+V7 (ordering safety) is enforced by the model checker before a plan is issued.
 """
 
 from __future__ import annotations
@@ -36,14 +36,14 @@ def validate(plan_json: dict, catalog, blueprint_ref: str, *, env_id: str, allow
     def bad(rule, addr, reason):
         v.append({"rule": rule, "address": addr, "reason": reason})
 
-    # V9: compiled_hash khớp chứng nhận
+    # V9: compiled_hash matches the certified build
     if expected_hash:
         got = ((plan_json.get("planned_values") or {}).get("outputs") or {}).get("compiled_hash", {}).get("value")
         if got is None:
             got = (((plan_json.get("configuration") or {}).get("root_module") or {}).get("outputs") or {}) \
                 .get("compiled_hash", {}).get("expression", {}).get("constant_value")
         if got != expected_hash:
-            bad("V9", "output.compiled_hash", f"compiled_hash {got} khác {expected_hash}")
+            bad("V9", "output.compiled_hash", f"compiled_hash {got} differs from {expected_hash}")
 
     for rc in plan_json.get("resource_changes") or []:
         if rc.get("mode", "managed") != "managed":
@@ -55,45 +55,45 @@ def validate(plan_json: dict, catalog, blueprint_ref: str, *, env_id: str, allow
         rtype = rc["type"]
         inst = _instance_of(rc)
 
-        # V1: mọi thay đổi thuộc một instance
+        # V1: every change belongs to an instance
         if inst is None or inst not in bp["instances"]:
-            bad("V1", addr, "thay đổi không thuộc instance nào của Blueprint")
+            bad("V1", addr, "change does not belong to any Blueprint instance")
             continue
 
-        # V2: chỉ instance được phép trong bước này
+        # V2: only instances permitted in this step may change
         if inst not in allowed:
-            bad("V2", addr, f"instance {inst} không được phép thay đổi ở bước này ({actions})")
+            bad("V2", addr, f"instance {inst} may not change in this step ({actions})")
 
-        # V8: loại tài nguyên nằm trong manifest và Registry
+        # V8: resource type is in the component manifest and the Registry
         if rtype not in registry["resource_types"] or rtype not in manifest_types[inst]:
-            bad("V8", addr, f"loại {rtype} không có trong manifest của {inst} hoặc Registry")
+            bad("V8", addr, f"type {rtype} is not in the manifest of {inst} or in the Registry")
 
         is_delete = "delete" in actions
         is_create = "create" in actions
         is_data = rtype in data_types
 
-        # V4: không replace tài nguyên dữ liệu
+        # V4: no replacement of data resources
         if is_data and is_delete and is_create:
-            bad("V4", addr, "replace tài nguyên dữ liệu (xóa rồi tạo lại = mất dữ liệu)")
-        # V3: xóa dữ liệu phải có snapshot available của chính operation
+            bad("V4", addr, "replacing a data resource (delete then create loses data)")
+        # V3: deleting data requires an available snapshot taken by this operation
         elif is_data and is_delete and inst not in snapshots_ok and not allow_data_loss:
-            bad("V3", addr, "xóa tài nguyên dữ liệu khi chưa có snapshot available của operation này")
+            bad("V3", addr, "deleting a data resource without an available snapshot from this operation")
 
-        # V5: tài nguyên tạo mới có đủ tag đúng (chỉ với loại có tags_all)
+        # V5: created resources carry the required tags (types with tags_all only)
         after = rc["change"].get("after") or {}
         if is_create and "tags_all" in after:
             tags = after.get("tags_all") or {}
             for k in REQUIRED_TAGS:
                 if k not in tags:
-                    bad("V5", addr, f"thiếu tag {k}")
+                    bad("V5", addr, f"missing tag {k}")
             if tags.get("infraflow:env_id") not in (None, env_id):
-                bad("V5", addr, f"tag env_id = {tags.get('infraflow:env_id')} khác {env_id}")
+                bad("V5", addr, f"tag env_id = {tags.get('infraflow:env_id')} differs from {env_id}")
 
-        # V6: tài nguyên sửa/xóa mang đúng env_id
+        # V6: updated or deleted resources carry the expected env_id
         before = rc["change"].get("before") or {}
         if (is_delete or "update" in actions) and "tags_all" in before:
             tag = (before.get("tags_all") or {}).get("infraflow:env_id")
             if tag != env_id:
-                bad("V6", addr, f"tài nguyên mang env_id {tag}, không phải {env_id}")
+                bad("V6", addr, f"resource has env_id {tag}, not {env_id}")
 
     return {"passed": not v, "plan_sha256": plan_sha256, "violations": v}

@@ -57,8 +57,8 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# Bảng chỉ đường cho private subnet. Chưa có đường ra Internet:
-# component egress (NAT) sẽ thêm route 0.0.0.0/0 vào bảng này khi thức.
+# Route table for the private subnets, initially without Internet access.
+# The egress component (NAT) adds the 0.0.0.0/0 route while the environment is awake.
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.this.id
 

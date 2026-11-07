@@ -16,8 +16,8 @@ G = build_graph(CAT, "web-db@1.0.0")
 class TestGraph(unittest.TestCase):
     def test_edges(self):
         self.assertIn(("app", "egress"), G.serving_edges)
-        self.assertNotIn(("app", "egress"), G.present_edges)  # serving không lấy input -> không cần tồn tại
-        self.assertIn(("app", "database"), G.present_edges)   # serving có input -> phải tồn tại
+        self.assertNotIn(("app", "egress"), G.present_edges)  # serving without inputs -> no presence requirement
+        self.assertIn(("app", "database"), G.present_edges)   # serving with inputs -> must exist
         self.assertEqual(G.dns_target, "entry")
         self.assertEqual(G.depth(), {"network": 0, "egress": 1, "database": 1, "app": 2, "entry": 3})
 
@@ -84,7 +84,7 @@ class TestModelChecker(unittest.TestCase):
         r = checker.check_plan(G, make_state(G, G.level_vector("deep")), p)
         self.assertFalse(r["passed"])
         self.assertEqual(r["violation"]["rule"], "A3")
-        self.assertTrue(r["violation"]["trace"])  # có phản ví dụ
+        self.assertTrue(r["violation"]["trace"])  # a counterexample is reported
 
     def test_bad_plan_delete_db_without_snapshot_is_caught(self):
         p = planner.plan(G, G.level_vector("deep"), "hibernate")
@@ -94,7 +94,7 @@ class TestModelChecker(unittest.TestCase):
         self.assertEqual(r["violation"]["rule"], "A4")
 
     def test_bad_plan_wrong_order_is_caught(self):
-        # Stop database trước khi stop app: có thứ tự xen kẽ làm app phục vụ khi db không phục vụ
+        # Stopping the database before the app: some interleaving has the app serving while the database is not
         p = planner.plan(G, G.level_vector("awake"), "deep", APP)
         db_stage = p["stages"][2]
         app_stage = p["stages"][1]
@@ -104,7 +104,7 @@ class TestModelChecker(unittest.TestCase):
         self.assertEqual(r["violation"]["rule"], "A2")
 
     def test_parallel_interleavings_explored(self):
-        # Thu hồi không lưu: egress và database bị tắt trong CÙNG một lần apply -> phải duyệt cả 2 thứ tự
+        # Reclaim without backup: egress and database are removed in the SAME apply -> both orders must be explored
         p = planner.plan(G, G.level_vector("awake"), "reclaimed", APP, keep_final_backup=False)
         r = checker.check_plan(G, checker.level_state(G, "awake"), p)
         self.assertTrue(r["passed"], r.get("violation"))

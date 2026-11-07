@@ -1,5 +1,5 @@
-# Lớp stoppable: EC2 chạy Docker image của khách ở private subnet.
-# Ngủ = stop (driver), thức = start (driver). Terraform chỉ tạo/xóa.
+# Class stoppable: an EC2 instance in a private subnet running the tenant's Docker image.
+# Sleep stops it and wake starts it (drivers). Terraform only creates and removes it.
 
 locals {
   instance_type = {
@@ -12,7 +12,7 @@ data "aws_ssm_parameter" "al2023" {
   name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 }
 
-# ---------- IAM: đọc cấu hình của chính Environment + SSM Session Manager ----------
+# ---------- IAM: read this Environment's configuration, plus SSM Session Manager ----------
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
@@ -68,20 +68,20 @@ resource "aws_iam_instance_profile" "app" {
 # ---------- Security group ----------
 resource "aws_security_group" "app" {
   name        = "${var.name_prefix}-app"
-  description = "App cua ${var.name_prefix}"
+  description = "Application for ${var.name_prefix}"
   vpc_id      = var.vpc_id
 
   tags = { Name = "${var.name_prefix}-app" }
 }
 
-# Ra ngoài: tải image (qua NAT), gọi SSM, nói chuyện với database
+# Egress: pull the image (through NAT), call SSM, reach the database
 resource "aws_vpc_security_group_egress_rule" "app_all" {
   security_group_id = aws_security_group.app.id
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }
 
-# Luật cho phép app vào database nằm trong vòng đời của app (không phải của database)
+# The rule admitting the app to the database follows the app's lifecycle, not the database's
 resource "aws_vpc_security_group_ingress_rule" "db_from_app" {
   security_group_id            = var.db_security_group_id
   referenced_security_group_id = aws_security_group.app.id
@@ -107,8 +107,8 @@ resource "aws_instance" "app" {
     volume_size = 30
   }
 
-  # Script chạy ở MỖI lần khởi động (systemd), nên stop/start bao nhiêu lần
-  # ứng dụng vẫn đọc lại mật khẩu từ SSM và chạy lại container.
+  # The script runs on EVERY boot (systemd), so after any number of stop/start cycles
+  # the instance reads the password from SSM again and restarts the container.
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
     region            = data.aws_region.current.region
     app_image         = var.app_image
@@ -118,12 +118,13 @@ resource "aws_instance" "app" {
     db_name           = var.db_name
     db_user           = var.db_user
     db_password_param = var.db_password_param
+    env_id            = var.env_id
   })
 
   tags = { Name = "${var.name_prefix}-app" }
 
   lifecycle {
-    # AMI "latest" đổi theo thời gian; không được vì thế mà thay máy (P1 hội tụ).
+    # The "latest" AMI changes over time; that alone must not replace the instance (convergence).
     ignore_changes = [ami]
   }
 }

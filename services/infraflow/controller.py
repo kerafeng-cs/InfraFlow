@@ -1,11 +1,11 @@
-"""Controller (TD mục 10): ba lớp kích hoạt, cùng một hàm đối soát.
+"""Controller: three trigger paths share one reconciliation function.
 
-  mode=single  đường sự kiện: API vừa ghi Desired State, đối soát ngay một Environment
-  mode=all     vòng đối soát định kỳ (EventBridge, 5 phút)
-  mode=sweep   máy quét tài nguyên mồ côi (EventBridge, 1 giờ), mark-and-sweep, KHÔNG tự xóa
-  mode=finish  executor (Step Functions) báo kết thúc operation
+  mode=single  event path: the API has just written Desired State; reconcile one Environment now
+  mode=all     periodic reconciliation (EventBridge, every 5 minutes)
+  mode=sweep   orphan resource scanner (EventBridge, hourly); mark and report, never deletes
+  mode=finish  the executor (Step Functions) reports the end of an operation
 
-Đối soát: Desired (desired.py) so với Actual (driver observe) -> planner -> model check -> khóa -> executor.
+Reconciliation: Desired (desired.py) vs Actual (driver observe) -> planner -> model check -> lock -> executor.
 """
 
 from __future__ import annotations
@@ -19,14 +19,15 @@ from . import drivers
 from .desired import desired_state, iso, manual_override, parse_ts
 from .ics import checker, planner
 from .ics.catalog import load_bundle
+from .ics.compiler import DEFAULT_APP
 from .ics.model import ABSENT, SNAPSHOTTED, ModelError, build_graph, make_state
 from .store import LockError, get_store
 
-OP_TIMEOUT = {"PROVISION": 30, "WAKE": 45, "SLEEP": 30, "RECLAIM": 75}  # phút
+OP_TIMEOUT = {"PROVISION": 30, "WAKE": 45, "SLEEP": 30, "RECLAIM": 75}  # minutes
 VERIFY_MAX_ATTEMPTS = 4
 
 _CATALOG = None
-_NOW = None  # test có thể cố định thời gian
+_NOW = None  # tests may pin the clock
 
 
 def now() -> datetime:
@@ -49,7 +50,7 @@ def _sfn():
 
 
 # ---------------------------------------------------------------------------
-# Tiện ích
+# Helpers
 # ---------------------------------------------------------------------------
 
 def level_of(desired: str, env: dict) -> str:
@@ -59,7 +60,7 @@ def level_of(desired: str, env: dict) -> str:
         return "reclaimed"
     if desired.startswith("ASLEEP:"):
         if env.get("status") == "REQUESTED":
-            return "prepared"  # chưa từng thức: chỉ dựng phần miễn phí
+            return "prepared"  # never woken: only the free resources exist
         return desired.split(":", 1)[1]
     raise ValueError(desired)
 
@@ -88,9 +89,9 @@ def tf_base_vars(lease: dict, env: dict) -> dict:
         "name_prefix": env["name_prefix"],
         "env_id": env["environment_id"],
         "size": params.get("size", "small"),
-        "app_image": app.get("image", "public.ecr.aws/nginx/nginx:stable"),
-        "app_port": int(app.get("port", 80)),
-        "app_health_path": app.get("health_path", "/"),
+        "app_image": app.get("image", DEFAULT_APP["image"]),
+        "app_port": int(app.get("port", DEFAULT_APP["port"])),
+        "app_health_path": app.get("health_path", DEFAULT_APP["health_path"]),
     }
     if os.environ.get("CERTIFICATE_ARN"):
         v["certificate_arn"] = os.environ["CERTIFICATE_ARN"]
@@ -98,7 +99,7 @@ def tf_base_vars(lease: dict, env: dict) -> dict:
 
 
 def attach_vars(graph, p: dict, lease: dict, env: dict) -> dict:
-    """Mỗi giai đoạn Terraform nhận đủ vector presence (không chỉ phần thay đổi) + biến chung."""
+    """Each Terraform stage receives the full presence vector (not only the changes) plus the shared variables."""
     base = tf_base_vars(lease, env)
     snaps = env.get("snapshots") or {}
     for st in p["stages"]:
@@ -130,7 +131,7 @@ def ctx_of(lease: dict, env: dict, op_id: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Đối soát một Environment
+# Reconcile one Environment
 # ---------------------------------------------------------------------------
 
 def reconcile(env_id: str, *, trigger_op: str | None = None, observe=None) -> dict:
@@ -141,7 +142,7 @@ def reconcile(env_id: str, *, trigger_op: str | None = None, observe=None) -> di
     lease = store.get_lease(env["lease_id"])
     t = now()
 
-    # Workflow đang chạy: để nó chạy nốt (TD 10.4). Quá hạn mà executor đã dừng -> UNKNOWN_OUTCOME.
+    # A workflow is running: let it finish. Past the deadline with the executor stopped -> UNKNOWN_OUTCOME.
     if env.get("active_operation_id"):
         return _check_stale(env, t)
     if env.get("blocked"):
@@ -159,7 +160,7 @@ def reconcile(env_id: str, *, trigger_op: str | None = None, observe=None) -> di
     store.update_env(env_id, {"instances": sigma, "observed_at": iso(t), "actual": label,
                               "desired": desired, "desired_source": source})
 
-    # Thu hồi đang chờ Verify
+    # Reclaim waiting for Verify
     if env.get("status") == "VERIFYING":
         return _verify(env, lease)
 
@@ -180,7 +181,7 @@ def reconcile(env_id: str, *, trigger_op: str | None = None, observe=None) -> di
         if fields:
             store.update_env(env_id, fields)
         if trigger_op:
-            store.update_op(trigger_op, {"status": "SUCCEEDED", "finished_at": iso(t), "note": "đã ở trạng thái đích"})
+            store.update_op(trigger_op, {"status": "SUCCEEDED", "finished_at": iso(t), "note": "already at target"})
         return {"environment_id": env_id, "result": "in_sync", "actual": label}
 
     start_state = make_state(graph, sigma, dns, health=(label == "AWAKE"))
@@ -213,7 +214,7 @@ def reconcile(env_id: str, *, trigger_op: str | None = None, observe=None) -> di
 
 
 def _update_activity(env: dict, t: datetime) -> dict:
-    """Tín hiệu hoạt động chính: RequestCount của ALB trong 5 phút gần nhất (TD 9.2)."""
+    """Primary activity signal: ALB RequestCount over the last 5 minutes."""
     try:
         lb = drivers._lb({"name_prefix": env["name_prefix"]})
         if lb is None:
@@ -226,7 +227,7 @@ def _update_activity(env: dict, t: datetime) -> dict:
         if sum(dp["Sum"] for dp in r.get("Datapoints", [])) > 0:
             return get_store().update_env(env["environment_id"], {"last_activity_at": iso(t)})
     except Exception:
-        pass  # thiếu số liệu thì coi là 0 request (không cập nhật)
+        pass  # missing datapoints count as zero requests (no update)
     return env
 
 
@@ -240,13 +241,13 @@ def _check_stale(env: dict, t: datetime) -> dict:
         try:
             arn = os.environ["STATE_MACHINE_ARN"].replace(":stateMachine:", ":execution:") + ":" + op["operation_id"]
             running = _sfn().describe_execution(executionArn=arn)["status"] == "RUNNING"
-        except Exception:  # không xác định được thì coi như không chạy
+        except Exception:  # treat an undeterminable status as not running
             running = False
         if not running:
             store.update_op(op["operation_id"], {"status": "BLOCKED", "error": {"code": "UNKNOWN_OUTCOME"},
                                                  "finished_at": iso(t)})
             store.release_lock(env["environment_id"], op["operation_id"])
-            return _block(env["environment_id"], "UNKNOWN_OUTCOME", f"operation {op['operation_id']} quá hạn")
+            return _block(env["environment_id"], "UNKNOWN_OUTCOME", f"operation {op['operation_id']} exceeded its deadline")
     return {"environment_id": env["environment_id"], "result": "busy", "operation_id": env["active_operation_id"]}
 
 
@@ -256,7 +257,7 @@ def _block(env_id: str, code: str, detail: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Kết thúc operation (executor gọi)
+# Operation completion (called by the executor)
 # ---------------------------------------------------------------------------
 
 def finish(event: dict) -> dict:
@@ -292,7 +293,7 @@ def finish(event: dict) -> dict:
                 fields["idle_slept_at"] = iso(t)
         store.update_op(op_id, {"status": "SUCCEEDED", "finished_at": iso(t)})
     elif status == "FAILED":
-        # Health gate thất bại: URL ở lại sleeping page, Environment được cho ngủ lại (TD 8, D13)
+        # Health gate failed: the URL stays on the sleeping page and the Environment is put back to sleep
         fields["override"] = manual_override("ASLEEP:deep", t, lease.get("activity_policy"), source="HEALTH_FAILED")
         fields["override"]["until"] = iso(t + timedelta(hours=2))
         store.update_op(op_id, {"status": "FAILED", "finished_at": iso(t),
@@ -316,7 +317,7 @@ def _cause(event) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Verify sau thu hồi (TD 11.3) và máy quét mồ côi (TD 10.1)
+# Verify after reclaim, and the orphan scanner
 # ---------------------------------------------------------------------------
 
 def tagged_resources(tag_filters: list) -> list:
@@ -346,7 +347,7 @@ def _verify(env: dict, lease: dict) -> dict:
         return {"environment_id": env["environment_id"], "result": "reclaimed"}
     if attempts >= VERIFY_MAX_ATTEMPTS:
         store.update_env(env["environment_id"], {"verify_attempts": attempts})
-        return _block(env["environment_id"], "VERIFY_FAILED", "còn tài nguyên: " + ", ".join(left[:10]))
+        return _block(env["environment_id"], "VERIFY_FAILED", "resources remain: " + ", ".join(left[:10]))
     store.update_env(env["environment_id"], {"verify_attempts": attempts})
     return {"environment_id": env["environment_id"], "result": "verifying", "left": left}
 
@@ -384,6 +385,6 @@ def handler(event, context=None):
             continue
         try:
             results.append(reconcile(env["environment_id"]))
-        except Exception as e:  # một Environment lỗi không làm hỏng lượt của Environment khác
+        except Exception as e:  # a failing Environment does not abort the pass for the others
             results.append({"environment_id": env["environment_id"], "result": "error", "error": str(e)[:300]})
     return {"mode": "all", "results": results}

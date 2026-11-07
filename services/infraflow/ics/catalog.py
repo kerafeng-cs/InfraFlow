@@ -1,7 +1,7 @@
-"""Nạp catalog (registry + component + blueprint).
+"""Catalog loading (registry, components, blueprints).
 
-- Từ mã nguồn (YAML) khi chạy CLI: load_from_repo().
-- Từ bản đóng gói JSON khi chạy trong Lambda/CodeBuild (không cần PyYAML): load_bundle().
+- From YAML sources when running the CLI: load_from_repo().
+- From the JSON bundle inside Lambda and CodeBuild, without PyYAML: load_bundle().
 """
 
 from __future__ import annotations
@@ -20,12 +20,12 @@ class Catalog:
 
     def component(self, ref: str) -> dict:
         if ref not in self.components:
-            raise KeyError(f"component không có trong catalog: {ref}")
+            raise KeyError(f"component not in catalog: {ref}")
         return self.components[ref]
 
     def blueprint(self, ref: str) -> dict:
         if ref not in self.blueprints:
-            raise KeyError(f"blueprint không có trong catalog: {ref}")
+            raise KeyError(f"blueprint not in catalog: {ref}")
         return self.blueprints[ref]
 
     def to_json(self) -> str:
@@ -34,7 +34,7 @@ class Catalog:
 
 
 def load_from_repo(root: str | os.PathLike) -> Catalog:
-    import yaml  # chỉ cần khi chạy CLI từ mã nguồn
+    import yaml  # needed only when running the CLI from source
 
     root = Path(root)
     registry = yaml.safe_load((root / "ics" / "registry.yaml").read_text(encoding="utf-8"))

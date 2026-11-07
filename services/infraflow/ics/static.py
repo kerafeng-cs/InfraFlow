@@ -1,6 +1,7 @@
-"""Kiểm tĩnh component (S1, S4-S7, F) và kiểm tra ghép Blueprint (C1-C6).
+"""Static component checks (S1, S4-S7, F) and Blueprint composition checks (C1-C6).
 
-S2, S8 cần chạy Terraform nên nằm ở kiểm định động; ở đây chỉ kiểm phần không tốn tiền.
+S2 and S8 require running Terraform and belong to dynamic verification; this module covers
+only the checks that need no cloud resources.
 """
 
 from __future__ import annotations
@@ -20,8 +21,8 @@ FORBIDDEN = [
     (re.compile(r"\bresource\s+\"local_file\""), "local_file"),
     (re.compile(r"\bbackend\s+\"[a-z0-9_]+\""), "backend"),
     (re.compile(r"^\s*cloud\s*\{", re.M), "cloud"),
-    (re.compile(r"\bprovider\s+\"[a-z0-9_]+\"\s*\{"), "khai báo provider trong component"),
-    (re.compile(r"source\s*=\s*\"(git::|github\.com|https?://)"), "module nguồn ngoài chưa vendor"),
+    (re.compile(r"\bprovider\s+\"[a-z0-9_]+\"\s*\{"), "provider block declared inside a component"),
+    (re.compile(r"source\s*=\s*\"(git::|github\.com|https?://)"), "external module source that is not vendored"),
     (re.compile(r"ignore_changes\s*=\s*all"), "ignore_changes = all"),
 ]
 RESOURCE_DECL = re.compile(r'^\s*resource\s+"([a-z0-9_]+)"\s+"[A-Za-z0-9_-]+"', re.M)
@@ -38,90 +39,90 @@ def check_component(manifest: dict, registry: dict, tf_dir: str | Path | None = 
     # S1: schema
     for k in REQUIRED_COMPONENT_KEYS:
         if k not in c:
-            _err(out, "S1", f"thiếu component.{k}")
+            _err(out, "S1", f"missing component.{k}")
     if out:
         return out
     if not NAME.match(c["name"]):
-        _err(out, "S1", f"tên không hợp lệ: {c['name']}")
+        _err(out, "S1", f"invalid name: {c['name']}")
     if not SEMVER.match(str(c["version"])):
-        _err(out, "S1", f"version không phải semver: {c['version']}")
+        _err(out, "S1", f"version is not semver: {c['version']}")
 
     classes = registry["classes"]
     rtypes = registry["resource_types"]
     bclass = c["billing_class"]
     if bclass not in classes:
-        _err(out, "S1", f"billing_class lạ: {bclass}")
+        _err(out, "S1", f"unknown billing_class: {bclass}")
         return out
 
-    # S5: lớp tính phí trung thực theo Resource Type Registry
+    # S5: the declared billing class matches the Resource Type Registry
     for rt in c["resource_types"]:
         if rt not in rtypes:
-            _err(out, "S5", f"loại tài nguyên ngoài Resource Type Registry: {rt}")
+            _err(out, "S5", f"resource type not in the Resource Type Registry: {rt}")
             continue
         forced = rtypes[rt].get("class")
         if forced and forced != "free" and forced != bclass:
-            # Tài nguyên tốn tiền theo kiểu `forced` mà component khai lớp khác
+            # A resource whose type forces a billing class, declared with a different class
             rank = {"free": 0, "stoppable": 1, "hourly_no_data": 2, "data": 3}
             if rank[forced] > rank[bclass] or forced == "data":
-                _err(out, "S5", f"{rt} thuộc lớp {forced} nhưng component khai {bclass}")
+                _err(out, "S5", f"{rt} is class {forced} but the component declares {bclass}")
         if rtypes[rt].get("data") and c.get("data_class") == "none":
-            _err(out, "S5", f"{rt} chứa dữ liệu nhưng data_class = none")
+            _err(out, "S5", f"{rt} holds data but data_class is none")
 
-    # S6: vòng đời khớp lớp
+    # S6: lifecycle matches the billing class
     lc = manifest.get("lifecycle") or {}
     valid_states = set(classes[bclass]["states"])
     levels = lc.get("levels") or {}
     for lv in ("awake", "deep"):
         if lv not in levels:
-            _err(out, "S6", f"thiếu mức {lv}")
+            _err(out, "S6", f"missing level {lv}")
     for lv, st in levels.items():
         if lv not in LEVEL_NAMES:
-            _err(out, "S6", f"mức lạ: {lv}")
+            _err(out, "S6", f"unknown level: {lv}")
         if st not in valid_states:
-            _err(out, "S6", f"mức {lv} dùng trạng thái {st} không hợp lệ với lớp {bclass}")
+            _err(out, "S6", f"level {lv} uses state {st}, which is not valid for class {bclass}")
     serving = lc.get("serving_states") or []
     if levels.get("awake") not in serving:
-        _err(out, "S6", "trạng thái của mức awake phải thuộc serving_states")
+        _err(out, "S6", "the state of level awake must be one of serving_states")
     actions = {k: v.get("driver") for k, v in (lc.get("actions") or {}).items()}
     used = set(levels.values())
     if bclass in ("stoppable", "data") and "STOPPED" in used:
         for a in ("start", "stop"):
             if a not in actions:
-                _err(out, "S6", f"lớp {bclass} dùng STOPPED nên cần driver '{a}'")
+                _err(out, "S6", f"class {bclass} uses STOPPED and therefore requires driver '{a}'")
     if "SNAPSHOTTED" in used:
         if "snapshot" not in actions:
-            _err(out, "S6", "dùng SNAPSHOTTED nên cần driver 'snapshot'")
+            _err(out, "S6", "uses SNAPSHOTTED and therefore requires driver 'snapshot'")
         if not lc.get("restore_variable"):
-            _err(out, "S6", "dùng SNAPSHOTTED nên cần restore_variable")
+            _err(out, "S6", "uses SNAPSHOTTED and therefore requires restore_variable")
     for a, d in actions.items():
         if d not in registry["drivers"]:
-            _err(out, "S6", f"driver ngoài Driver Registry: {d}")
+            _err(out, "S6", f"driver not in the Driver Registry: {d}")
 
-    # S7: cổng có kiểu hợp lệ, thuộc tính tồn tại
+    # S7: ports have known types and existing attributes
     ptypes = registry["port_types"]
     for p in manifest.get("provides") or []:
         if p["type"] not in ptypes:
-            _err(out, "S7", f"kiểu cổng lạ: {p['type']}")
+            _err(out, "S7", f"unknown port type: {p['type']}")
             continue
         for attr in (p.get("attributes") or {}):
             if attr not in ptypes[p["type"]]:
-                _err(out, "S7", f"cổng {p['port']}: thuộc tính {attr} không có trong {p['type']}")
+                _err(out, "S7", f"port {p['port']}: attribute {attr} is not part of {p['type']}")
     for r in manifest.get("requires") or []:
         if r["type"] not in ptypes:
-            _err(out, "S7", f"kiểu cổng lạ: {r['type']}")
+            _err(out, "S7", f"unknown port type: {r['type']}")
             continue
         if r.get("when", "present") not in ("present", "serving"):
-            _err(out, "S7", f"cổng {r['port']}: when phải là present hoặc serving")
+            _err(out, "S7", f"port {r['port']}: when must be present or serving")
         for attr in (r.get("inputs") or {}):
             if attr not in ptypes[r["type"]]:
-                _err(out, "S7", f"cổng {r['port']}: thuộc tính {attr} không có trong {r['type']}")
+                _err(out, "S7", f"port {r['port']}: attribute {attr} is not part of {r['type']}")
     outputs = manifest.get("outputs") or {}
     for a, spec in (lc.get("actions") or {}).items():
         tgt = spec.get("target")
         if tgt and outputs and not outputs.get(tgt, {}).get("stable"):
-            _err(out, "S7", f"target của action {a} ({tgt}) phải là output stable")
+            _err(out, "S7", f"target of action {a} ({tgt}) must be a stable output")
 
-    # S4 + F: đọc mã Terraform
+    # S4 and F: inspect the Terraform source
     if tf_dir is not None:
         tf_dir = Path(tf_dir)
         declared = set()
@@ -130,13 +131,13 @@ def check_component(manifest: dict, registry: dict, tf_dir: str | Path | None = 
             declared |= set(RESOURCE_DECL.findall(text))
             for rx, what in FORBIDDEN:
                 if rx.search(text):
-                    _err(out, "F", f"FORBIDDEN_CONSTRUCT: {what} trong {f.name}")
+                    _err(out, "F", f"FORBIDDEN_CONSTRUCT: {what} in {f.name}")
         missing = declared - set(c["resource_types"])
         extra = set(c["resource_types"]) - declared
         if missing:
-            _err(out, "S4", "tài nguyên có trong mã nhưng không khai báo: " + ", ".join(sorted(missing)))
+            _err(out, "S4", "resources in the source but not declared: " + ", ".join(sorted(missing)))
         if extra:
-            _err(out, "S4", "khai báo nhưng không có trong mã: " + ", ".join(sorted(extra)))
+            _err(out, "S4", "declared but not in the source: " + ", ".join(sorted(extra)))
 
     return out
 
@@ -165,37 +166,37 @@ def check_composition(bp: dict, catalog) -> list:
         ti, tp = b["to"].split(".", 1)
         if fi == "sys":
             if fp != "dns":
-                _err(out, "C1", f"cổng hệ thống lạ: {b['from']}")
+                _err(out, "C1", f"unknown system port: {b['from']}")
                 continue
             dns_bindings += 1
             if provides.get((ti, tp)) != "http.public/v1":
-                _err(out, "C2", f"sys.dns phải nối vào http.public/v1, không phải {b['to']}")
+                _err(out, "C2", f"sys.dns must bind to http.public/v1, not {b['to']}")
             continue
         if fi not in comps:
-            _err(out, "C1", f"binding từ instance không tồn tại: {b['from']}")
+            _err(out, "C1", f"binding from an unknown instance: {b['from']}")
             continue
         req = next((r for r in comps[fi].get("requires") or [] if r["port"] == fp), None)
         if req is None:
-            _err(out, "C1", f"{fi} không có cổng requires '{fp}'")
+            _err(out, "C1", f"{fi} has no requires port '{fp}'")
             continue
         if (fi, fp) in bound:
-            _err(out, "C1", f"{b['from']} có hơn một binding")
+            _err(out, "C1", f"{b['from']} has more than one binding")
         bound[(fi, fp)] = b["to"]
         ptype = provides.get((ti, tp))
         if ptype is None:
-            _err(out, "C1", f"{b['to']} không phải cổng provides")
+            _err(out, "C1", f"{b['to']} is not a provides port")
             continue
         if ptype != req["type"]:
-            _err(out, "C2", f"{b['from']} cần {req['type']} nhưng {b['to']} là {ptype}")
+            _err(out, "C2", f"{b['from']} requires {req['type']} but {b['to']} is {ptype}")
         if ti != "sys":
             edges.add((fi, ti))
 
     for i, m in comps.items():
         for r in m.get("requires") or []:
             if (i, r["port"]) not in bound:
-                _err(out, "C1", f"{i}.{r['port']} ({r['type']}) chưa có binding")
+                _err(out, "C1", f"{i}.{r['port']} ({r['type']}) has no binding")
 
-    # C3: không chu trình
+    # C3: no cycles
     graph = {i: {t for (f, t) in edges if f == i} for i in comps}
     state: dict = {}
 
@@ -210,16 +211,16 @@ def check_composition(bp: dict, catalog) -> list:
         return False
 
     if any(state.get(u) is None and dfs(u) for u in comps):
-        _err(out, "C3", "đồ thị phụ thuộc có chu trình")
+        _err(out, "C3", "the dependency graph has a cycle")
 
     # C4
     if dns_bindings != 1:
-        _err(out, "C4", f"cần đúng một binding vào sys.dns, có {dns_bindings}")
+        _err(out, "C4", f"exactly one binding to sys.dns is required, found {dns_bindings}")
 
-    # C6: mức ngủ được mọi instance hỗ trợ
+    # C6: every instance supports each declared level
     for lv in bp.get("supported_levels") or []:
         for i, m in comps.items():
             if lv not in ((m.get("lifecycle") or {}).get("levels") or {}):
-                _err(out, "C6", f"{i} không hỗ trợ mức {lv}")
+                _err(out, "C6", f"{i} does not support level {lv}")
 
     return out

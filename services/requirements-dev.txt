@@ -1,4 +1,4 @@
-# Lambda và CodeBuild chỉ cần thư viện chuẩn + boto3 có sẵn.
-# Máy phát triển cần thêm:
+# Lambda and CodeBuild need only the standard library and the bundled boto3.
+# Development machines also need:
 pyyaml>=6
 boto3>=1.34

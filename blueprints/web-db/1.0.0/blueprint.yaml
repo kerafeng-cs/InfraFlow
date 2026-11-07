@@ -3,7 +3,7 @@ blueprint:
   name: web-db
   version: 1.0.0
   owner: infraflow
-  summary: "Web app (Docker trên EC2) + PostgreSQL + ALB"
+  summary: "Web application (Docker on EC2) with PostgreSQL behind an ALB"
 parameters:
   size: { type: string, enum: [small, medium], default: small }
 instances:
@@ -12,7 +12,7 @@ instances:
   database: { component: aws-rds-postgres@1.0.0,   parameters: { size: "${param.size}" } }
   app:      { component: aws-ec2-docker-app@1.0.0, parameters: { size: "${param.size}" } }
   entry:    { component: aws-alb-https-entry@1.0.0 }
-bindings:                     # from = phía requires, to = phía provides
+bindings:                     # from = requires side, to = provides side
   - { from: egress.net,    to: network.net }
   - { from: database.net,  to: network.net }
   - { from: app.net,       to: network.net }

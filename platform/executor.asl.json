@@ -1,5 +1,5 @@
 {
-  "Comment": "InfraFlow lifecycle executor: thông dịch lifecycle plan đã qua model checking (TD 8.1, IC 10.1)",
+  "Comment": "InfraFlow lifecycle executor: interprets a lifecycle plan that has passed model checking",
   "StartAt": "Pre",
   "States": {
     "Pre": {

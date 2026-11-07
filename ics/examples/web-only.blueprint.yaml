@@ -3,7 +3,7 @@ blueprint:
   name: web-only
   version: 1.0.0
   owner: infraflow
-  summary: "Ví dụ Compose: thiếu database nên C1 phải từ chối"
+  summary: "Negative example: no database, so C1 must reject it"
 parameters:
   size: { type: string, enum: [small, medium], default: small }
 instances:

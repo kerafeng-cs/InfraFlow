@@ -1,4 +1,4 @@
-# Cổng "provides" của component, kiểu net.vpc/v1 (IC mục 4.3)
+# Provides port "net" (net.vpc/v1)
 output "vpc_id"                 { value = aws_vpc.this.id }
 output "public_subnet_ids"      { value = aws_subnet.public[*].id }
 output "private_subnet_ids"     { value = aws_subnet.private[*].id }

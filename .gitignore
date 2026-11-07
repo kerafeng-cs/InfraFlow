@@ -1,5 +1,5 @@
 # ---------- Terraform ----------
-# State chứa ID tài nguyên và có thể chứa bí mật (mật khẩu RDS): KHÔNG BAO GIỜ commit
+# State holds resource IDs and secrets (the RDS password). Never commit it.
 .terraform/
 *.tfstate
 *.tfstate.*
@@ -17,15 +17,15 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
-# Biến sinh ra khi chạy (infraflow.local ghi đè mỗi giai đoạn)
+# Written on every stage by infraflow.local
 stage.auto.tfvars.json
 .infraflow-local.json
-# Biến chứa bí mật, nếu có, đặt tên *.secret.tfvars(.json)
+# Variable files that contain secrets must be named *.secret.tfvars(.json)
 *.secret.tfvars
 *.secret.tfvars.json
-# Zip mã Lambda/CodeBuild do archive_file sinh ra
+# Lambda and CodeBuild archives produced by archive_file
 platform/.build/
-# GIỮ LẠI .terraform.lock.hcl: ghim phiên bản provider (ICS mục 4.9 yêu cầu)
+# .terraform.lock.hcl is committed: it pins provider versions.
 
 # ---------- Python ----------
 __pycache__/
@@ -41,8 +41,9 @@ htmlcov/
 
 # ---------- Node ----------
 node_modules/
+dist/
 
-# ---------- Bí mật, AWS ----------
+# ---------- Secrets and AWS ----------
 *.pem
 *.key
 .env
@@ -50,10 +51,7 @@ node_modules/
 .aws/
 credentials
 
-# ---------- Ghi chú cá nhân ----------
-.local.notes/
-
-# ---------- Hệ điều hành, editor ----------
+# ---------- Operating system and editors ----------
 .DS_Store
 Thumbs.db
 desktop.ini

@@ -4,9 +4,9 @@ terraform {
     aws     = { source = "hashicorp/aws", version = "~> 6.0" }
     archive = { source = "hashicorp/archive", version = "~> 2.4" }
   }
-  # Lần đầu dựng nền tảng thì state ở máy (chưa có bucket). Sau khi apply xong có thể
-  # chuyển sang S3: thêm backend "s3" { bucket = <output state_bucket>, key = "platform/terraform.tfstate",
-  # region = "ap-southeast-1", use_lockfile = true } rồi chạy `terraform init -migrate-state`.
+  # The first deployment keeps state locally because the bucket does not exist yet. Afterwards,
+  # move it to S3: add backend "s3" { bucket = <output state_bucket>, key = "platform/terraform.tfstate",
+  # region = "ap-southeast-1", use_lockfile = true } and run `terraform init -migrate-state`.
 }
 
 provider "aws" {

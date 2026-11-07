@@ -1,1 +1,1 @@
-"""InfraFlow: lõi điều phối vòng đời môi trường (Lambda + CodeBuild + CLI)."""
+"""InfraFlow: environment lifecycle orchestration core (Lambda, CodeBuild, CLI)."""

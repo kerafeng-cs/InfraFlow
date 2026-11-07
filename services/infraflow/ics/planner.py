@@ -1,14 +1,16 @@
-"""Planner tổng quát: sinh lifecycle plan từ đồ thị phụ thuộc (TD mục 8.1, báo cáo mục 2.3.5).
+"""Generic planner: derives a lifecycle plan from the dependency graph.
 
-Quy tắc:
-1. Chia thay đổi thành XUỐNG (giảm phục vụ / xóa) và LÊN (tạo / khởi động).
-2. Đang trỏ DNS vào ứng dụng mà đích không phải `awake`: đổi DNS về sleeping page trước, chờ drain.
-3. XUỐNG trước theo độ sâu giảm dần; LÊN sau theo độ sâu tăng dần. Cùng độ sâu thì chung giai đoạn.
-4. Trong một giai đoạn: mọi thay đổi presence gộp thành một lần Terraform apply; driver chạy song song.
-5. Trước khi tắt tài nguyên dữ liệu: snapshot (giai đoạn riêng, trước đó).
-6. Đích là `awake`: health gate rồi mới đổi DNS vào ứng dụng.
+Rules:
+1. Split the changes into DOWN (stop serving or remove) and UP (create or start).
+2. If DNS points to the application and the target is not `awake`, switch DNS to the sleeping
+   page first and wait for connections to drain.
+3. DOWN changes run first, by decreasing depth; UP changes run after, by increasing depth.
+   Changes at the same depth share a stage.
+4. Within a stage, all presence changes form one Terraform apply; drivers run in parallel.
+5. A data resource is snapshotted, in a stage of its own, before it is removed.
+6. When the target is `awake`, the health gate passes before DNS switches to the application.
 
-Plan chỉ được giao cho executor sau khi qua model checking (checker.check_plan).
+A plan is handed to the executor only after it passes model checking (checker.check_plan).
 """
 
 from __future__ import annotations
@@ -20,12 +22,13 @@ DRAIN_SECONDS = 90
 
 
 def target_vector(graph: Graph, current: dict, level: str, keep_final_backup: bool = True) -> dict:
-    """Đích cụ thể của một lần chuyển mức.
+    """Concrete target vector of one level transition.
 
-    - awake / prepared: đúng tuyệt đối vector của mức.
-    - reclaimed: mọi thứ ABSENT; tài nguyên dữ liệu thành SNAPSHOTTED nếu giữ bản lưu cuối.
-    - các mức ngủ: instance nào đang RẺ HƠN đích thì giữ nguyên (không đánh thức chỉ để cho ngủ),
-      miễn là vector thu được vẫn an toàn; không thì dùng đúng vector của mức.
+    - awake and prepared: exactly the level vector.
+    - reclaimed: everything ABSENT; data resources become SNAPSHOTTED when a final backup is kept.
+    - sleep levels: an instance that is already CHEAPER than its target stays as it is (it is not
+      woken only to be put to sleep), provided the resulting vector is safe; otherwise the exact
+      level vector is used.
     """
     base = graph.level_vector(level)
     if level in ("awake", "prepared"):
@@ -54,19 +57,19 @@ def target_vector(graph: Graph, current: dict, level: str, keep_final_backup: bo
 def _driver(inst, action: str) -> str:
     name = inst.drivers.get(action)
     if not name:
-        raise ModelError(f"{inst.name} không có driver cho '{action}'")
+        raise ModelError(f"{inst.name} has no driver for '{action}'")
     return name
 
 
 def plan(graph: Graph, current: dict, level: str, dns_now: str = SLEEP,
          keep_final_backup: bool = True) -> dict:
-    """Sinh lifecycle plan từ `current` (dict instance -> trạng thái) tới `level`.
+    """Builds the lifecycle plan from `current` (instance -> state) to `level`.
 
-    level: một trong awake/shallow/deep/hibernate/prepared/reclaimed.
-    keep_final_backup: chỉ dùng khi level = reclaimed (chính sách dữ liệu của Lease).
+    level: one of awake, shallow, deep, hibernate, prepared, reclaimed.
+    keep_final_backup: used only when level is reclaimed (the data policy of the Lease).
     """
     if level not in LEVELS and level not in ("prepared", "reclaimed"):
-        raise ModelError(f"mức không hợp lệ: {level}")
+        raise ModelError(f"invalid level: {level}")
     target = target_vector(graph, current, level, keep_final_backup)
     depth = graph.depth()
     reclaim = level == "reclaimed"
@@ -84,7 +87,7 @@ def plan(graph: Graph, current: dict, level: str, dns_now: str = SLEEP,
             continue
         d = depth[u]
 
-        # ---- XUỐNG ----
+        # ---- DOWN ----
         if t in (ABSENT, SNAPSHOTTED) and c not in (ABSENT, SNAPSHOTTED):
             b = bucket(down, d)
             if inst.is_data and (t == SNAPSHOTTED or (reclaim and keep_final_backup)):
@@ -95,7 +98,7 @@ def plan(graph: Graph, current: dict, level: str, dns_now: str = SLEEP,
             bucket(down, d)["drivers"].append({"instance": u, "action": "stop", "driver": _driver(inst, "stop")})
             continue
 
-        # ---- LÊN ----
+        # ---- UP ----
         if c in (ABSENT, SNAPSHOTTED) and t in (PRESENT, RUNNING):
             bucket(up, d)["tf"][u] = True
             continue
@@ -103,7 +106,7 @@ def plan(graph: Graph, current: dict, level: str, dns_now: str = SLEEP,
             bucket(up, d)["drivers"].append({"instance": u, "action": "start", "driver": _driver(inst, "start")})
             continue
 
-        raise ModelError(f"không có đường chuyển {u}: {c} -> {t}")
+        raise ModelError(f"no transition for {u}: {c} -> {t}")
 
     presence = {u: current[u] not in (ABSENT, SNAPSHOTTED) for u in graph.order}
     restore = {u: current[u] == SNAPSHOTTED for u in graph.order}
@@ -131,7 +134,7 @@ def plan(graph: Graph, current: dict, level: str, dns_now: str = SLEEP,
         emit(up[d], f"up-{d}")
 
     if reclaim:
-        # Thu hồi: Terraform destroy toàn bộ state (bao gồm cả những gì planner không biết).
+        # Reclaim: Terraform destroys the whole state, including anything the planner does not model.
         if stages and stages[-1]["terraform"]:
             stages[-1]["terraform"]["mode"] = "destroy"
 

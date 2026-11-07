@@ -3,7 +3,7 @@ component:
   name: aws-rds-postgres
   version: 1.0.0
   owner: infraflow
-  summary: "PostgreSQL 16 trên RDS, single-AZ"
+  summary: "PostgreSQL 16 on RDS, single-AZ"
   billing_class: data
   data_class: persistent
   resource_types:

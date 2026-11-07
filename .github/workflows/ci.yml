@@ -17,10 +17,10 @@ jobs:
       - name: Unit test (planner, model checker, validator, compiler, controller, API, executor)
         working-directory: services
         run: python -m unittest discover -s tests -t . -v
-      - name: Kiểm định ICS cho toàn bộ catalog (kiểm tĩnh + kiểm tra ghép + model checking)
+      - name: ICS checks for the whole catalog (static, composition, model checking)
         working-directory: services
         run: python -m infraflow.cli check
-      - name: catalog.json phải khớp YAML
+      - name: catalog.json matches the YAML sources
         working-directory: services
         run: |
           python -m infraflow.cli bundle
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.9.8"
+          terraform_version: "1.10.5"
       - run: terraform fmt -check -recursive components platform
       - name: validate component
         run: |

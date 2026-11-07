@@ -1,7 +1,8 @@
-"""Executor chạy tại máy (WSL) cho một thư mục root Terraform đã biên dịch.
+"""Local executor for a compiled Terraform root module.
 
-Dùng để thử Việc A trước khi có nền tảng: cùng planner, model checker, Plan Validator và driver
-như bản chạy trên AWS; khác ở chỗ Terraform chạy bằng tiến trình con thay vì CodeBuild.
+Runs Sleep and Wake from a workstation without the hosted platform. It uses the same planner,
+model checker, Plan Validator and drivers as the platform; the only difference is that Terraform
+runs as a subprocess instead of in CodeBuild.
 
   python -m infraflow.local status --dir ../live/dev/web-db-manual
   python -m infraflow.local go awake --dir ../live/dev/web-db-manual
@@ -47,12 +48,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="infraflow.local")
     ap.add_argument("cmd", choices=["status", "go"])
     ap.add_argument("level", nargs="?", choices=["awake", "deep", "hibernate", "prepared", "reclaimed"])
-    ap.add_argument("--dir", required=True, help="thư mục root Terraform (vd ../live/dev/web-db-manual)")
+    ap.add_argument("--dir", required=True, help="Terraform root module directory (for example ../live/dev/web-db-manual)")
     ap.add_argument("--blueprint", default="web-db@1.0.0")
     ap.add_argument("--profile", default="infraflow")
     ap.add_argument("--region", default="ap-southeast-1")
-    ap.add_argument("--yes", action="store_true", help="không hỏi xác nhận")
-    ap.add_argument("--no-backup", action="store_true", help="reclaimed: không giữ bản lưu cuối")
+    ap.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    ap.add_argument("--no-backup", action="store_true", help="reclaimed: do not keep a final backup")
     args = ap.parse_args(argv)
 
     os.environ.setdefault("AWS_PROFILE", args.profile)
@@ -69,28 +70,28 @@ def main(argv=None) -> int:
     ctx = {"environment_id": env_id, "name_prefix": base["name_prefix"], "host": env_id,
            "operation_id": "local-" + hashlib.sha1(os.urandom(8)).hexdigest()[:8], "snapshots": local["snapshots"]}
     sigma = observe(graph, ctx)
-    print("Trạng thái quan sát được:")
+    print("Observed state:")
     for u in graph.order:
         print(f"  {u:<9} {sigma[u]}")
     print(f"  dns       {local['dns']}")
     if args.cmd == "status":
         return 0
     if not args.level:
-        ap.error("go cần mức đích")
+        ap.error("go requires a target level")
 
     p = planner.plan(graph, sigma, args.level, local["dns"], keep_final_backup=not args.no_backup)
     mc = checker.check_plan(graph, make_state(graph, sigma, local["dns"], local["dns"] == "APP"), p, allow_unsafe_start=True)
-    print(f"\nModel checking: {'ĐẠT' if mc['passed'] else 'KHÔNG ĐẠT'} ({mc['states_explored']} trạng thái)")
+    print(f"\nModel checking: {'PASS' if mc['passed'] else 'FAIL'} ({mc['states_explored']} states)")
     if not mc["passed"]:
         print(json.dumps(mc["violation"], ensure_ascii=False, indent=2))
         return 1
     if planner.is_noop(p):
-        print("Đã ở trạng thái đích, không cần làm gì.")
+        print("Already at the target level; nothing to do.")
         return 0
     lease = {"app": {}, "parameters": {"size": base.get("size", "small")}}
     controller.attach_vars(graph, p, lease, {"environment_id": env_id, "name_prefix": base["name_prefix"],
                                              "snapshots": local["snapshots"]})
-    print("\nKế hoạch:")
+    print("\nPlan:")
     for s in p["pre"]:
         print(f"  pre     {s['action']} {s.get('value', s.get('seconds', ''))}")
     for st in p["stages"]:
@@ -100,7 +101,7 @@ def main(argv=None) -> int:
         print("  health  elbv2.target_healthy")
     for s in p["post"]:
         print(f"  post    dns -> {s['value']}")
-    if not args.yes and input("\nThực hiện? (yes/no) ").strip() != "yes":
+    if not args.yes and input("\nApply? (yes/no) ").strip() != "yes":
         return 1
 
     store = MemoryStore()
@@ -131,7 +132,7 @@ def main(argv=None) -> int:
             res = validator.validate(plan_json, cat, args.blueprint, env_id=env_id,
                                      allowed_instances=t["allowed_instances"], snapshots_ok=snaps,
                                      allow_data_loss=bool(p.get("allow_data_loss")))
-            print(f"  Plan Validator: {'ĐẠT' if res['passed'] else 'TỪ CHỐI'}")
+            print(f"  Plan Validator: {'PASS' if res['passed'] else 'REJECTED'}")
             if not res["passed"]:
                 print(json.dumps(res["violations"], ensure_ascii=False, indent=2))
                 return 2
@@ -148,7 +149,7 @@ def main(argv=None) -> int:
         local["dns"] = s["value"]
     state_file.write_text(json.dumps(local, indent=2))
     env = store.get_env(env_id)
-    print("\nXONG.", f"Ứng dụng: {env.get('app_url')}" if env.get("app_url") else "")
+    print("\nDone.", f"Application: {env.get('app_url')}" if env.get("app_url") else "")
     return 0
 
 

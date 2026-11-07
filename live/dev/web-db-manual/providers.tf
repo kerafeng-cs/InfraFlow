@@ -10,14 +10,15 @@ terraform {
       version = "~> 3.6"
     }
   }
-  # Tạm để state ở máy. Việc B sẽ chuyển lên S3 kèm use_lockfile.
+  # Local state for this manually operated environment. Platform-managed environments
+  # use the S3 backend with use_lockfile.
 }
 
 provider "aws" {
   region  = "ap-southeast-1"
   profile = "infraflow"
 
-  # Gắn tag cho mọi tài nguyên (TD mục 11.1, bất biến 4)
+  # Every resource carries the ownership tags checked by Plan Validator rules V5 and V6
   default_tags {
     tags = {
       "infraflow:managed"  = "true"

@@ -1,1 +1,1 @@
-"""InfraFlow Component Standard (ICS) v0.1: manifest, mô hình, planner, model checker, compiler, validator."""
+"""InfraFlow Component Standard (ICS) v0.1: manifests, model, planner, model checker, compiler, validator."""

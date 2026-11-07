@@ -3,7 +3,7 @@ component:
   name: aws-alb-https-entry
   version: 1.0.0
   owner: infraflow
-  summary: "ALB công khai ở 2 public subnet; HTTPS khi có chứng chỉ"
+  summary: "Public ALB in two public subnets; HTTPS when a certificate is set"
   billing_class: hourly_no_data
   data_class: none
   resource_types:

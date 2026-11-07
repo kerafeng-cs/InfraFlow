@@ -1,7 +1,8 @@
-"""Model checker (C7, C8, "luôn cứu được"): vét cạn mọi thứ tự xen kẽ của các hành động
-song song trong từng giai đoạn của plan và kiểm mọi trạng thái đạt tới đều an toàn.
+"""Model checker (C7, C8, RESCUE): explores every interleaving of the parallel actions in each
+stage of a plan and verifies that every reachable state is safe.
 
-Không gian trạng thái nhỏ (web-db < 2.000 trạng thái), BFS chạy trong vài phần trăm giây.
+The state space is small (web-db has fewer than 2,000 states), so breadth-first search finishes
+in a few hundredths of a second.
 """
 
 from __future__ import annotations
@@ -14,8 +15,8 @@ from .model import (APP, SLEEP, Graph, ModelError, SysState, apply_action, make_
 
 
 # ---------------------------------------------------------------------------
-# Plan -> các nhóm hành động nguyên tử. Hành động trong cùng nhóm chạy song song (xen kẽ tùy ý);
-# các nhóm chạy tuần tự.
+# Plan -> groups of atomic actions. Actions in a group run in parallel (any interleaving);
+# groups run in sequence.
 # ---------------------------------------------------------------------------
 
 def _atomic(step: dict) -> tuple:
@@ -55,11 +56,11 @@ def _describe(action: tuple) -> str:
 
 
 def check_plan(graph: Graph, start: SysState, p: dict, allow_unsafe_start: bool = False) -> dict:
-    """BFS trên (chỉ số nhóm, tập hành động đã làm trong nhóm, trạng thái).
+    """Breadth-first search over (group index, actions done in the group, state).
 
-    allow_unsafe_start: dùng khi sửa trôi lệch (ví dụ ai đó bật EC2 trên console lúc môi trường ngủ).
-    Khi đó trạng thái xuất phát đã vi phạm; plan được chấp nhận nếu không sinh vi phạm MỚI nào
-    và kết thúc ở trạng thái an toàn.
+    allow_unsafe_start: used to repair drift (for example an instance started from the console
+    while the environment sleeps). The start state already violates a rule; the plan is accepted
+    if it introduces no new violation and ends in a safe state.
     """
     groups = plan_groups(p)
     allow_loss = bool(p.get("allow_data_loss"))
@@ -68,7 +69,7 @@ def check_plan(graph: Graph, start: SysState, p: dict, allow_unsafe_start: bool 
     tolerated = set(start_v) if allow_unsafe_start else set()
     if start_v and not allow_unsafe_start:
         return {"passed": False, "states_explored": 1,
-                "violation": {"rule": start_v[0][0], "message": "trạng thái xuất phát không an toàn: " + start_v[0][1],
+                "violation": {"rule": start_v[0][0], "message": "unsafe start state: " + start_v[0][1],
                               "trace": [start.pretty()]}}
 
     root = (0, frozenset(), start)
@@ -128,21 +129,21 @@ def check_plan(graph: Graph, start: SysState, p: dict, allow_unsafe_start: bool 
         fv = violations(graph, f)
         if fv:
             return {"passed": False, "states_explored": len(seen_states),
-                    "violation": {"rule": fv[0][0], "message": "kết thúc ở trạng thái không an toàn: " + fv[0][1],
+                    "violation": {"rule": fv[0][0], "message": "ends in an unsafe state: " + fv[0][1],
                                   "trace": []}}
         if f.as_dict() != target:
             return {"passed": False, "states_explored": len(seen_states),
-                    "violation": {"rule": "TARGET", "message": f"kết thúc ở {f.pretty()} thay vì {target}", "trace": []}}
+                    "violation": {"rule": "TARGET", "message": f"ends in {f.pretty()} instead of {target}", "trace": []}}
         if p["target_level"] == "awake" and graph.dns_target and f.dns != APP:
             return {"passed": False, "states_explored": len(seen_states),
-                    "violation": {"rule": "TARGET", "message": "thức xong nhưng DNS chưa trỏ vào ứng dụng", "trace": []}}
+                    "violation": {"rule": "TARGET", "message": "awake, but DNS does not point to the application", "trace": []}}
 
     return {"passed": True, "states_explored": len(seen_states), "reachable": seen_states,
             "start_violations": [list(x) for x in start_v]}
 
 
 # ---------------------------------------------------------------------------
-# Kiểm cả Blueprint: C7, C8, luôn cứu được
+# Whole-Blueprint checks: C7, C8, RESCUE
 # ---------------------------------------------------------------------------
 
 def level_state(graph: Graph, level: str) -> SysState:
@@ -158,14 +159,14 @@ def check_blueprint(graph: Graph, recoverability: bool = True) -> dict:
         if not ok:
             report["passed"] = False
 
-    # C7: mỗi mức hỗ trợ là trạng thái an toàn
+    # C7: every supported level is a safe state
     for lv in graph.supported_levels:
         v = violations(graph, level_state(graph, lv))
-        add("C7", f"mức {lv} an toàn", not v, None if not v else {"rule": v[0][0], "message": v[0][1]})
+        add("C7", f"level {lv} is safe", not v, None if not v else {"rule": v[0][0], "message": v[0][1]})
     if not report["passed"]:
         return report
 
-    # C8: mọi chuyển mức (kể cả từ prepared và tới reclaimed)
+    # C8: every level transition, including from prepared and to reclaimed
     sources = ["prepared"] + list(graph.supported_levels)
     targets = list(graph.supported_levels) + ["reclaimed"]
     reachable = set()
@@ -182,18 +183,18 @@ def check_blueprint(graph: Graph, recoverability: bool = True) -> dict:
                     continue
                 r = check_plan(graph, start, p)
                 report["states_explored"] += r["states_explored"]
-                add("C8", f"{a} -> {b}" + ("" if b != "reclaimed" else (" (giữ bản lưu cuối)" if keep else " (không lưu)")),
+                add("C8", f"{a} -> {b}" + ("" if b != "reclaimed" else (" (keep final backup)" if keep else " (no backup)")),
                     r["passed"], r.get("violation"))
                 if r["passed"]:
                     reachable |= r["reachable"]
 
-    # Luôn cứu được: từ mọi trạng thái đạt tới được (kể cả khi operation dừng giữa chừng)
-    # planner luôn có đường an toàn về deep và về thu hồi.
+    # RESCUE: from every reachable state, including one where an operation stopped midway,
+    # the planner has a safe path to deep and to reclaimed.
     if recoverability and report["passed"]:
         rescue_level = "deep" if "deep" in graph.supported_levels else graph.supported_levels[-1]
         failed = None
         for s in sorted(reachable, key=lambda x: x.pretty()):
-            clean = SysState(s.sigma, s.dns, s.health, frozenset())  # operation mới: chưa có snapshot
+            clean = SysState(s.sigma, s.dns, s.health, frozenset())  # a new operation starts without snapshots
             for lv in (rescue_level, "reclaimed"):
                 try:
                     p = planner.plan(graph, clean.as_dict(), lv, clean.dns)
@@ -205,6 +206,6 @@ def check_blueprint(graph: Graph, recoverability: bool = True) -> dict:
                     break
             if failed:
                 break
-        add("RESCUE", f"luôn cứu được về {rescue_level} và reclaimed ({len(reachable)} trạng thái)", failed is None, failed)
+        add("RESCUE", f"recoverable to {rescue_level} and reclaimed ({len(reachable)} states)", failed is None, failed)
 
     return report

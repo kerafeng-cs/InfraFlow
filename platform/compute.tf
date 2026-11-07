@@ -115,7 +115,7 @@ resource "aws_codebuild_project" "tf" {
       name  = "TF_VERSION"
       value = var.terraform_version
     }
-    # Đổi khi mã hoặc component đổi -> buộc CodeBuild tải bản mới
+    # Changes whenever the code or components change, so CodeBuild fetches the new version
     environment_variable {
       name  = "CODE_MD5"
       value = "${data.archive_file.code.output_md5}-${data.archive_file.components.output_md5}"
@@ -134,7 +134,7 @@ resource "aws_codebuild_project" "tf" {
   }
 }
 
-# ---------- EventBridge Scheduler: vòng đối soát và máy quét mồ côi ----------
+# ---------- EventBridge Scheduler: reconciliation loop and orphan scanner ----------
 resource "aws_scheduler_schedule" "reconcile" {
   name                = "${local.p}-reconcile"
   schedule_expression = "rate(5 minutes)"

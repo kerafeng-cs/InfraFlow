@@ -1,5 +1,5 @@
-# InfraFlow Component Standard v0.1: ba danh mục đóng (TD mục 4.1).
-# Mở rộng danh mục = phát hành phiên bản chuẩn mới.
+# InfraFlow Component Standard v0.1: three closed registries.
+# Extending a registry means releasing a new version of the standard.
 ics_version: "0.1"
 
 port_types:
@@ -10,8 +10,8 @@ port_types:
   http.public/v1:        [dns_name, zone_id]
   workload.container/v1: [image, port, health_path]
 
-# Loại tài nguyên được phép, kèm lớp tính phí "thật" của nó (để kiểm S5).
-# class: lớp mà tài nguyên này ép component phải có (null = không ràng buộc).
+# Permitted resource types with their actual billing class (checked by S5).
+# class: the billing class this resource forces on its component (null = unconstrained).
 resource_types:
   aws_vpc:                             { class: free }
   aws_internet_gateway:                { class: free }
@@ -58,7 +58,7 @@ drivers:
   - terraform.presence
   - terraform.restore
 
-# Lớp tính phí -> trạng thái hợp lệ (TD mục 4.3)
+# Billing class -> valid states
 classes:
   free:           { states: [ABSENT, PRESENT],                        initial: PRESENT }
   stoppable:      { states: [ABSENT, RUNNING, STOPPED],               initial: RUNNING }

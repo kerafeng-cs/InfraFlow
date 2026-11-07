@@ -8,7 +8,7 @@ data "aws_iam_policy_document" "lambda_assume" {
   }
 }
 
-# ---------- API: chỉ đọc/ghi dữ liệu điều khiển và gọi controller. KHÔNG có quyền hạ tầng. ----------
+# ---------- API: reads and writes control data and invokes the controller. NO infrastructure permissions. ----------
 resource "aws_iam_role" "api" {
   name               = "${local.p}-api"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
@@ -30,7 +30,7 @@ resource "aws_iam_role_policy" "api" {
   })
 }
 
-# ---------- Controller + driver: quan sát và thao tác tài nguyên mang tag InfraFlow ----------
+# ---------- Controller and drivers: observe and act on resources tagged by InfraFlow ----------
 resource "aws_iam_role" "ops" {
   name               = "${local.p}-ops"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
@@ -56,7 +56,7 @@ resource "aws_iam_role_policy" "ops" {
         "tag:GetResources", "cloudwatch:GetMetricStatistics"]
         Resource = "*"
       },
-      # Chỉ start/stop/snapshot tài nguyên do InfraFlow quản lý
+      # Start, stop and snapshot only resources managed by InfraFlow
       {
         Effect    = "Allow"
         Action    = ["ec2:StartInstances", "ec2:StopInstances"]
@@ -101,7 +101,7 @@ resource "aws_iam_role_policy" "sfn" {
   })
 }
 
-# ---------- CodeBuild: chạy Terraform cho Environment (runner tin cậy, TD 12.4) ----------
+# ---------- CodeBuild: runs Terraform for Environments (trusted runner) ----------
 resource "aws_iam_role" "codebuild" {
   name = "${local.p}-tf-runner"
   assume_role_policy = jsonencode({
@@ -118,14 +118,14 @@ resource "aws_iam_role_policy" "codebuild" {
       { Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = "*" },
       { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"], Resource = [aws_s3_bucket.state.arn, "${aws_s3_bucket.state.arn}/*", aws_s3_bucket.artifacts.arn, "${aws_s3_bucket.artifacts.arn}/*"] },
       { Effect = "Allow", Action = ["dynamodb:GetItem"], Resource = aws_dynamodb_table.operations.arn },
-      # Loại tài nguyên trong Resource Type Registry (ics/registry.yaml), giới hạn trong vùng
+      # Resource types from the Resource Type Registry (ics/registry.yaml), limited to the region
       {
         Effect    = "Allow"
         Action    = ["ec2:*", "elasticloadbalancing:*", "rds:*", "ssm:GetParameter", "ssm:GetParameters", "ssm:PutParameter", "ssm:DeleteParameter", "ssm:DescribeParameters", "ssm:AddTagsToResource", "ssm:ListTagsForResource", "ssm:RemoveTagsFromResource", "kms:Decrypt"]
         Resource  = "*"
         Condition = { StringEquals = { "aws:RequestedRegion" = local.region } }
       },
-      # IAM chỉ trong path /infraflow/env/ (role và instance profile của app)
+      # IAM only under path /infraflow/env/ (the app role and instance profile)
       {
         Effect   = "Allow"
         Action   = ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole", "iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListInstanceProfilesForRole", "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile", "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile", "iam:TagInstanceProfile", "iam:PassRole"]
@@ -136,7 +136,7 @@ resource "aws_iam_role_policy" "codebuild" {
   })
 }
 
-# ---------- EventBridge Scheduler gọi controller ----------
+# ---------- EventBridge Scheduler invokes the controller ----------
 resource "aws_iam_role" "scheduler" {
   name = "${local.p}-scheduler"
   assume_role_policy = jsonencode({

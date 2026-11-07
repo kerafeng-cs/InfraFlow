@@ -1,7 +1,7 @@
-"""Lưu trữ dữ liệu điều khiển (IC mục 15).
+"""Control data storage.
 
-DynamoStore dùng DynamoDB thật; MemoryStore dùng cho unit test. Cả hai cùng giao diện.
-Khóa Environment: ghi `active_operation_id` bằng conditional write (IC mục 9.4).
+DynamoStore uses DynamoDB; MemoryStore serves unit tests. Both expose the same interface.
+Environment lock: `active_operation_id` is set with a conditional write.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 variable "name_prefix" {
   type        = string
-  description = "Tiền tố tên tài nguyên, ví dụ dev-demo-qa"
+  description = "Resource name prefix, for example dev-demo-qa"
 }
 
 variable "vpc_cidr" {

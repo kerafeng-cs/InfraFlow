@@ -3,7 +3,7 @@ component:
   name: aws-ec2-docker-app
   version: 1.0.0
   owner: infraflow
-  summary: "EC2 Amazon Linux 2023 ở private subnet chạy một Docker image"
+  summary: "Amazon Linux 2023 EC2 instance in a private subnet running one Docker image"
   billing_class: stoppable
   data_class: none
   resource_types:
@@ -29,7 +29,7 @@ requires:
     inputs: { vpc_id: vpc_id, private_subnet_ids: subnet_ids }
   - port: egress
     type: net.egress/v1
-    when: serving                    # cần NAT để tải image, nhưng không lấy giá trị nào từ NAT
+    when: serving                    # needs NAT to pull the image, but reads no values from it
   - port: db
     type: db.postgres/v1
     when: serving

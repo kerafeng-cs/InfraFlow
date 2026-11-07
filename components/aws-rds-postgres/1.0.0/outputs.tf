@@ -1,4 +1,4 @@
-# Cổng provides "db" (db.postgres/v1)
+# Provides port "db" (db.postgres/v1)
 output "db_identifier"     { value = aws_db_instance.this.identifier }
 output "endpoint_address"  { value = aws_db_instance.this.address }
 output "endpoint_port"     { value = aws_db_instance.this.port }

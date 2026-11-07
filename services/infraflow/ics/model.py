@@ -1,11 +1,11 @@
-"""Mô hình trừu tượng của một Blueprint (TD mục 4.8, báo cáo mục 2.3.6).
+"""Abstract model of a Blueprint.
 
-- I: tập instance; E_p, E_s: cạnh `present` và `serving`, (u, v) nghĩa là u cần v.
-- Trạng thái hệ thống s = (sigma, dns, health, snaps):
-    sigma  : trạng thái từng instance theo lớp vòng đời
-    dns    : "SLEEP" (sleeping page) hoặc "APP"
-    health : True khi health gate đã đạt và chưa có gì thay đổi sau đó
-    snaps  : instance dữ liệu đã có snapshot `available` trong operation hiện tại
+- I: set of instances; E_p, E_s: `present` and `serving` edges, where (u, v) means u depends on v.
+- System state s = (sigma, dns, health, snaps):
+    sigma  : state of each instance, drawn from its billing class
+    dns    : "SLEEP" (sleeping page) or "APP"
+    health : True once the health gate has passed and nothing has changed since
+    snaps  : data instances with an `available` snapshot taken in the current operation
 """
 
 from __future__ import annotations
@@ -54,15 +54,15 @@ class Instance:
 @dataclass
 class Graph:
     blueprint: str
-    order: tuple  # instance theo thứ tự khai báo (để tất định)
+    order: tuple  # instances in declaration order (for determinism)
     instances: dict  # name -> Instance
-    present_edges: frozenset  # (u, v): u tồn tại => v tồn tại
-    serving_edges: frozenset  # (u, v): u phục vụ => v phục vụ
-    dns_target: str | None  # instance cung cấp http.public cho sys.dns
+    present_edges: frozenset  # (u, v): u exists => v exists
+    serving_edges: frozenset  # (u, v): u serves => v serves
+    dns_target: str | None  # instance providing http.public to sys.dns
     supported_levels: tuple
     bindings: list = field(default_factory=list)
 
-    # ---- đồ thị ----
+    # ---- graph ----
     def requires(self, u: str) -> set:
         return {v for (a, v) in self.present_edges | self.serving_edges if a == u}
 
@@ -71,7 +71,7 @@ class Graph:
 
         def d(u: str, stack: tuple = ()) -> int:
             if u in stack:
-                raise ModelError(f"chu trình qua {u}")
+                raise ModelError(f"cycle through {u}")
             if u not in memo:
                 reqs = self.requires(u)
                 memo[u] = 0 if not reqs else 1 + max(d(v, stack + (u,)) for v in reqs)
@@ -79,19 +79,19 @@ class Graph:
 
         return {u: d(u) for u in self.order}
 
-    # ---- vector trạng thái theo mức ----
+    # ---- state vector per level ----
     def level_vector(self, level: str) -> dict:
         if level == "prepared":
             return {u: (PRESENT if self.instances[u].billing_class == "free" else ABSENT) for u in self.order}
         if level == "reclaimed":
             return {u: ABSENT for u in self.order}
         if level not in LEVELS:
-            raise ModelError(f"mức không hợp lệ: {level}")
+            raise ModelError(f"invalid level: {level}")
         return {u: self.instances[u].levels[level] for u in self.order}
 
     def satisfies_sleep(self, sigma: dict, level: str) -> bool:
-        """Mức ngủ được thỏa khi mỗi instance đúng trạng thái của mức hoặc ở trạng thái rẻ hơn
-        (ví dụ PREPARED thỏa mọi ASLEEP; đang hibernate thì cũng thỏa deep)."""
+        """A sleep level is satisfied when every instance is in the level's state or in a cheaper one
+        (for example PREPARED satisfies any ASLEEP state, and hibernate also satisfies deep)."""
         target = self.level_vector(level)
         for u in self.order:
             if sigma[u] == target[u]:
@@ -103,20 +103,20 @@ class Graph:
 
 
 # ---------------------------------------------------------------------------
-# Trạng thái và tính an toàn
+# State and safety
 # ---------------------------------------------------------------------------
 
 def exists(state: str) -> bool:
-    """SNAPSHOTTED nghĩa là tài nguyên đã bị xóa, chỉ còn snapshot."""
+    """SNAPSHOTTED means the resource has been deleted and only its snapshot remains."""
     return state not in (ABSENT, SNAPSHOTTED)
 
 
-# Chi phí tương đối của trạng thái, dùng để nới đích của các mức ngủ.
+# Relative cost of each state, used to relax the target of sleep levels.
 COST = {ABSENT: 0, SNAPSHOTTED: 0, STOPPED: 1, PRESENT: 2, RUNNING: 2}
 
 
 def cheaper_or_equal_absent(cur: str, target: str) -> bool:
-    """cur rẻ hơn target, hoặc cả hai đều không tồn tại (ABSENT/SNAPSHOTTED)."""
+    """cur is cheaper than or equal to target, or neither exists (ABSENT/SNAPSHOTTED)."""
     return COST[cur] < COST[target] or (not exists(cur) and not exists(target))
 
 
@@ -145,38 +145,38 @@ def make_state(graph: Graph, sigma: dict, dns: str = SLEEP, health: bool = False
 
 
 def violations(graph: Graph, s: SysState) -> list:
-    """Trả về danh sách vi phạm A1-A3 (A4 kiểm ở bước chuyển, xem apply_action)."""
+    """Returns the A1-A3 violations of a state. A4 is checked on transitions, see apply_action."""
     sigma = s.as_dict()
     out = []
     for (u, v) in sorted(graph.present_edges):
         if exists(sigma[u]) and not exists(sigma[v]):
-            out.append(("A1", f"{u} tồn tại nhưng {v} không tồn tại"))
+            out.append(("A1", f"{u} exists but {v} does not"))
     for (u, v) in sorted(graph.serving_edges):
         iu, iv = graph.instances[u], graph.instances[v]
         if iu.serving(sigma[u]) and not iv.serving(sigma[v]):
-            out.append(("A2", f"{u} đang phục vụ nhưng {v} không phục vụ ({sigma[v]})"))
+            out.append(("A2", f"{u} is serving but {v} is not ({sigma[v]})"))
     if s.dns == APP:
         awake = graph.level_vector("awake")
         if not s.health:
-            out.append(("A3", "DNS trỏ vào ứng dụng khi health gate chưa đạt"))
+            out.append(("A3", "DNS points to the application before the health gate has passed"))
         bad = [u for u in graph.order if sigma[u] != awake[u]]
         if bad:
-            out.append(("A3", "DNS trỏ vào ứng dụng khi " + ", ".join(bad) + " chưa ở trạng thái thức"))
+            out.append(("A3", "DNS points to the application while " + ", ".join(bad) + " is not awake"))
     return out
 
 
 # ---------------------------------------------------------------------------
-# Hành động nguyên tử
+# Atomic actions
 # ---------------------------------------------------------------------------
-# ("tf", inst, True|False)   Terraform bật/tắt instance (presence)
+# ("tf", inst, True|False)   Terraform creates or removes the instance (presence)
 # ("start", inst) ("stop", inst)   driver
-# ("snapshot", inst)          driver snapshot, chờ available
+# ("snapshot", inst)          snapshot driver, waits until available
 # ("dns", "SLEEP"|"APP")
 # ("health",)                 health gate
 
 def apply_action(graph: Graph, s: SysState, action: tuple, allow_data_loss: bool = False):
-    """Trả về (trạng thái mới, vi phạm chuyển trạng thái hoặc None).
-    Ném ModelError nếu hành động không áp dụng được (plan sai)."""
+    """Returns (new state, transition violation or None).
+    Raises ModelError when the action is not applicable, which indicates a malformed plan."""
     kind = action[0]
     sigma = s.as_dict()
 
@@ -186,7 +186,7 @@ def apply_action(graph: Graph, s: SysState, action: tuple, allow_data_loss: bool
     if kind == "health":
         awake = graph.level_vector("awake")
         if any(sigma[u] != awake[u] for u in graph.order):
-            raise ModelError("health gate chạy khi chưa mọi instance ở trạng thái thức")
+            raise ModelError("health gate run before every instance is awake")
         return SysState(s.sigma, s.dns, True, s.snaps), None
 
     if kind == "wait":
@@ -201,38 +201,38 @@ def apply_action(graph: Graph, s: SysState, action: tuple, allow_data_loss: bool
             if cur == ABSENT:
                 return s.with_sigma(inst.name, inst.initial_state), None
             if cur == SNAPSHOTTED:
-                return s.with_sigma(inst.name, RUNNING), None  # khôi phục từ snapshot
-            raise ModelError(f"tf bật {inst.name} khi đang {cur}")
+                return s.with_sigma(inst.name, RUNNING), None  # restored from snapshot
+            raise ModelError(f"tf create {inst.name} while {cur}")
         if cur in (ABSENT, SNAPSHOTTED):
-            raise ModelError(f"tf tắt {inst.name} khi đang {cur}")
+            raise ModelError(f"tf remove {inst.name} while {cur}")
         if inst.is_data:
             if inst.name in s.snaps:
                 return s.with_sigma(inst.name, SNAPSHOTTED), None
             if allow_data_loss:
                 return s.with_sigma(inst.name, ABSENT), None
-            return s.with_sigma(inst.name, ABSENT), ("A4", f"xóa {inst.name} (dữ liệu) khi chưa có snapshot")
+            return s.with_sigma(inst.name, ABSENT), ("A4", f"deleting data instance {inst.name} without a snapshot")
         return s.with_sigma(inst.name, ABSENT), None
 
     if kind == "start":
         if cur != STOPPED:
-            raise ModelError(f"start {inst.name} khi đang {cur}")
+            raise ModelError(f"start {inst.name} while {cur}")
         return s.with_sigma(inst.name, RUNNING), None
 
     if kind == "stop":
         if cur != RUNNING:
-            raise ModelError(f"stop {inst.name} khi đang {cur}")
+            raise ModelError(f"stop {inst.name} while {cur}")
         return s.with_sigma(inst.name, STOPPED), None
 
     if kind == "snapshot":
         if not inst.is_data or cur not in (RUNNING, STOPPED):
-            raise ModelError(f"snapshot {inst.name} khi đang {cur}")
+            raise ModelError(f"snapshot {inst.name} while {cur}")
         return SysState(s.sigma, s.dns, s.health, s.snaps | {inst.name}), None
 
-    raise ModelError(f"hành động lạ: {action}")
+    raise ModelError(f"unknown action: {action}")
 
 
 # ---------------------------------------------------------------------------
-# Dựng đồ thị từ blueprint + catalog
+# Build the graph from a blueprint and the catalog
 # ---------------------------------------------------------------------------
 
 def build_graph(catalog, blueprint_ref: str | None = None, blueprint: dict | None = None) -> Graph:
@@ -266,14 +266,14 @@ def build_graph(catalog, blueprint_ref: str | None = None, blueprint: dict | Non
                 dns_target = t_inst
             continue
         if t_inst == "sys":
-            continue  # sys.lease_app: cấu hình, không phải instance
+            continue  # sys.lease_app is configuration, not an instance
         comp = catalog.component(bp["instances"][f_inst]["component"])
         req = next((r for r in comp.get("requires", []) if r["port"] == f_port), None)
         if req is None:
-            continue  # C-check báo lỗi riêng
+            continue  # reported separately by the composition checks
         when = req.get("when", "present")
         has_inputs = bool(req.get("inputs"))
-        # Lấy giá trị (inputs) từ phía cung cấp nghĩa là phía cung cấp phải tồn tại.
+        # Reading values (inputs) from the provider requires the provider to exist.
         if when == "present" or has_inputs:
             present_edges.add((f_inst, t_inst))
         if when == "serving":

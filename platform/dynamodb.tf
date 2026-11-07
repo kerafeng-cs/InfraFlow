@@ -1,4 +1,4 @@
-# Dữ liệu điều khiển (IC mục 15). PAY_PER_REQUEST: không tải thì gần như không tốn tiền.
+# Control data. PAY_PER_REQUEST costs almost nothing when idle.
 
 resource "aws_dynamodb_table" "leases" {
   name         = "${local.p}-leases"

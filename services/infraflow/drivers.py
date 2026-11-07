@@ -1,10 +1,11 @@
-"""Driver Registry (TD mục 4.6): tập ĐÓNG các hành động AWS do InfraFlow viết.
+"""Driver Registry: the CLOSED set of AWS actions written by InfraFlow.
 
-Component không được định nghĩa driver mới; đây là ranh giới bảo mật.
-Mọi driver idempotent (P5): gọi lại khi đã ở trạng thái đích thì trả NOOP.
+Components cannot define new drivers; this is a security boundary.
+Every driver is idempotent: calling it again at the target state returns NOOP.
 
-Tìm tài nguyên theo quy ước tên `<name_prefix>-<hậu tố>` mà component đặt, cộng tag env_id.
-Lambda tối đa 15 phút nên các vòng chờ dừng ở ~13 phút; quá thì báo lỗi để executor xử lý.
+Resources are located by the `<name_prefix>-<suffix>` naming convention used by components,
+together with the env_id tag. Lambda runs for at most 15 minutes, so wait loops stop at about
+13 minutes and raise an error for the executor to handle.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ def _poll(fn, ok, what: str, interval: int = 15, max_wait: int | None = None):
         if ok(v):
             return v
         if time.time() > deadline:
-            raise DriverError(f"quá thời gian chờ {what} (trạng thái cuối: {v})")
+            raise DriverError(f"timed out waiting for {what} (last state: {v})")
         SLEEP(interval)
 
 
@@ -127,19 +128,19 @@ def observe_all(graph, ctx) -> dict:
     for u in graph.order:
         d = graph.instances[u].drivers.get("observe")
         if d not in OBSERVE:
-            raise DriverError(f"{u}: không có driver observe")
+            raise DriverError(f"{u}: no observe driver")
         out[u] = OBSERVE[d](ctx)
     return out
 
 
 # ---------------------------------------------------------------------------
-# hành động
+# actions
 # ---------------------------------------------------------------------------
 
 def ec2_start(ctx, action):
     i = _ec2_instance(ctx)
     if i is None:
-        raise DriverError("không tìm thấy EC2 của app")
+        raise DriverError("application EC2 instance not found")
     if i["State"]["Name"] in ("stopping",):
         _poll(lambda: _ec2_instance(ctx)["State"]["Name"], lambda s: s == "stopped", "EC2 stopped")
     if _ec2_instance(ctx)["State"]["Name"] != "running":
@@ -164,7 +165,7 @@ def ec2_stop(ctx, action):
 def ec2_status_ok(ctx, action):
     i = _ec2_instance(ctx)
     if i is None:
-        raise DriverError("không tìm thấy EC2 của app")
+        raise DriverError("application EC2 instance not found")
 
     def st():
         r = aws("ec2").describe_instance_status(InstanceIds=[i["InstanceId"]])
@@ -178,7 +179,7 @@ def ec2_status_ok(ctx, action):
 def rds_start(ctx, action):
     db = _rds(ctx)
     if db is None:
-        raise DriverError("không tìm thấy RDS")
+        raise DriverError("RDS instance not found")
     ident = db["DBInstanceIdentifier"]
     if db["DBInstanceStatus"] == "stopping":
         _poll(lambda: _rds(ctx)["DBInstanceStatus"], lambda s: s == "stopped", "RDS stopped")
@@ -200,7 +201,7 @@ def rds_stop(ctx, action):
     if st == "stopped":
         return {"status": "NOOP", "observed_state": STOPPED}
     if st != "available":
-        _poll(lambda: _rds(ctx)["DBInstanceStatus"], lambda s: s in ("available", "stopped"), "RDS ổn định", interval=20)
+        _poll(lambda: _rds(ctx)["DBInstanceStatus"], lambda s: s in ("available", "stopped"), "RDS to settle", interval=20)
     if _rds(ctx)["DBInstanceStatus"] == "available":
         aws("rds").stop_db_instance(DBInstanceIdentifier=ident)
     _poll(lambda: _rds(ctx)["DBInstanceStatus"], lambda s: s == "stopped", "RDS stopped", interval=20)
@@ -208,12 +209,12 @@ def rds_stop(ctx, action):
 
 
 def rds_snapshot(ctx, action):
-    """Snapshot rồi chờ `available` (TD mục 11.3). Ghi snapshot_id vào operation để Validator V3 thấy."""
+    """Takes a snapshot and waits until it is `available`. Records snapshot_id on the operation for Validator rule V3."""
     from .store import get_store
 
     db = _rds(ctx)
     if db is None:
-        raise DriverError("không tìm thấy RDS để snapshot")
+        raise DriverError("RDS instance to snapshot not found")
     snap_id = f"{ctx['name_prefix']}-{ctx['operation_id']}".lower().replace("_", "-")[:255]
     rds = aws("rds")
     try:
@@ -223,7 +224,7 @@ def rds_snapshot(ctx, action):
         exists = False
     if not exists:
         if db["DBInstanceStatus"] not in ("available", "stopped"):
-            _poll(lambda: _rds(ctx)["DBInstanceStatus"], lambda s: s in ("available", "stopped"), "RDS ổn định", interval=20)
+            _poll(lambda: _rds(ctx)["DBInstanceStatus"], lambda s: s in ("available", "stopped"), "RDS to settle", interval=20)
         rds.create_db_snapshot(DBSnapshotIdentifier=snap_id, DBInstanceIdentifier=db["DBInstanceIdentifier"],
                                Tags=[{"Key": "infraflow:env_id", "Value": ctx["environment_id"]},
                                      {"Key": "infraflow:managed", "Value": "true"},
@@ -259,9 +260,10 @@ def elbv2_target_healthy(ctx, action):
 
 
 def dns_point(ctx, action):
-    """DNS chỉ trỏ vào ứng dụng sau health gate (bất biến 3). Bản ghi wildcard luôn trỏ sleeping page,
-    nên đi ngủ chỉ cần xóa bản ghi riêng. Chưa có hosted zone thì chỉ ghi trạng thái (sleeping page
-    sẽ chuyển hướng tới địa chỉ ALB khi môi trường thức)."""
+    """DNS points to the application only after the health gate (invariant A3). The wildcard record
+    always points to the sleeping page, so going to sleep only removes the specific record. Without
+    a hosted zone only the state is recorded, and the sleeping page redirects to the ALB address
+    while the environment is awake."""
     from .store import get_store
 
     value = action["value"]
@@ -269,7 +271,7 @@ def dns_point(ctx, action):
     domain = os.environ.get("DOMAIN")
     lb = _lb(ctx) if value == "APP" else None
     if value == "APP" and lb is None:
-        raise DriverError("không có ALB để trỏ DNS vào")
+        raise DriverError("no ALB to point DNS to")
     fqdn = f"{ctx['host']}.{domain}" if domain else None
 
     if zone and domain:
@@ -315,11 +317,11 @@ ACTIONS = {
 
 
 def handler(event, context=None):
-    """Lambda driver runner. Vào: {"action": {...}, "ctx": {...}}. Lỗi thì ném ngoại lệ để Step Functions bắt."""
+    """Lambda driver runner. Input: {"action": {...}, "ctx": {...}}. Errors raise so that Step Functions can catch them."""
     action, ctx = event["action"], event["ctx"]
     fn = ACTIONS.get(action["driver"])
     if fn is None:
-        raise DriverError(f"driver ngoài registry: {action['driver']}")
+        raise DriverError(f"driver not in the registry: {action['driver']}")
     res = fn(ctx, action)
     res["driver"] = action["driver"]
     res["instance"] = action.get("instance")

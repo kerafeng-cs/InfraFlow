@@ -2,13 +2,13 @@ variable "name_prefix" {
   type = string
 }
 
-# Cổng requires "net" (net.vpc/v1, when: present)
+# Requires port "net" (net.vpc/v1, when: present)
 variable "public_subnet_ids" {
-  description = "Public subnet; NAT đặt ở subnet đầu tiên (AZ a)"
+  description = "Public subnets; the NAT Gateway is placed in the first one"
   type        = list(string)
 }
 
 variable "private_route_table_id" {
-  description = "Route table của private subnet, nơi thêm route 0.0.0.0/0 -> NAT"
+  description = "Route table of the private subnets that receives the 0.0.0.0/0 -> NAT route"
   type        = string
 }

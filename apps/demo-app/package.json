@@ -1,0 +1,26 @@
+{
+  "name": "infraflow-demo-app",
+  "version": "1.0.0",
+  "description": "Reference workload for InfraFlow: a small web application backed by PostgreSQL that shows data surviving Sleep and Wake cycles.",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "start": "node dist/server.js",
+    "dev": "node --watch src/server.ts"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "typescript": "^6.0.2"
+  }
+}
