@@ -40,4 +40,4 @@ docker compose up --build   # application on http://localhost:8080 with a local 
 
 ## Image
 
-`.github/workflows/demo-app.yml` builds the image and publishes it to `ghcr.io/<owner>/infraflow-demo-app` on every push to `main` that changes this directory. The package must be public, or the instances need registry credentials, because the instances pull it anonymously.
+`.github/workflows/demo-app.yml` builds the image and publishes it to `ghcr.io/<owner>/infraflow-demo-app` on every push to `master` that changes this directory. The package must be public, or the instances need registry credentials, because the instances pull it anonymously.

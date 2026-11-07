@@ -23,7 +23,7 @@ Run `terraform fmt -recursive components platform` before committing. Do not for
 
 ## 2. Demo application image
 
-The default workload is `ghcr.io/kerafeng-cs/infraflow-demo-app:1`, built from `apps/demo-app` by the `demo-app` workflow on every push to `main` that changes that directory. Instances pull it anonymously, so the GHCR package must be public (package settings, Change visibility). A Lease can use any other image that follows the [workload contract](../apps/demo-app/README.md#contract).
+The default workload is `ghcr.io/kerafeng-cs/infraflow-demo-app:1`, built from `apps/demo-app` by the `demo-app` workflow on every push to `master` that changes that directory. Instances pull it anonymously, so the GHCR package must be public (package settings, Change visibility). A Lease can use any other image that follows the [workload contract](../apps/demo-app/README.md#contract).
 
 ## 3. Operating an environment without the platform
 
