@@ -13,19 +13,19 @@
         "web/style.css"
       ],
       "fingerprints": {
-        ".superdesign/design-system.md": "2823b2d27d29e175c98894a3bea6af36325462e63e245a87b1e98e0f5028d96d",
-        "web/index.html": "a22bd0b48bb50d48ccb2a35f6f9ea64c4eace892881a8b4380d35e97d5a4d1d0",
-        "web/app.js": "78661794a959595c3b68cf033bbd361b58611cc15a3061a9cafe9d956c88327e",
-        "web/style.css": "7e103d26adbcb3f9a54663df1cec2856d30dcbddbc4429bb4ffbd3b2a5a4f698"
+        ".superdesign/design-system.md": "47808b4019bd7421e7ddbd5c78778dcdd902305d158b45fe2c83ee4b82c16bf0",
+        "web/index.html": "a25e44663bd11010ddee85f22b13a4304e2e84128ab9346935b256d93a5ca2e5",
+        "web/app.js": "286e500f123a4d7f5a7936f955d6525f026d56191e3f7372b6cf51278fb2de64",
+        "web/style.css": "e8b3c6364247477b59a9a4c773650a74430d20d14c6f1a9dd0f94298a65f93cd"
       },
       "drafts": {
         "cea45fa6-475e-4416-bd84-55c4188de9a7": {
-          "title": "InfraFlow Environments v2",
-          "visualDirection": "navy operations console, calm light workspace",
-          "currentVersion": 1
+          "title": "InfraFlow Environments workbench",
+          "visualDirection": "IBM Plex Sans, light utility rail, ruled operational data",
+          "currentVersion": 2
         }
       },
-      "updatedAt": "2026-11-08T16:01:13.690764+00:00"
+      "updatedAt": "2026-11-08T16:12:51.783142+00:00"
     }
   }
 }

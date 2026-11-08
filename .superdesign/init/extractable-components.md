@@ -2,7 +2,7 @@
 
 Current app has no component module boundary; these are extractable design patterns only.
 
-## AppHeader
+## AppRail
 - Source: `web/index.html`, `web/style.css`
 - Category: layout
 - Props: active route, signed-in user, navigation visibility

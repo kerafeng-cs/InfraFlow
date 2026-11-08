@@ -404,6 +404,7 @@
   function route() {
     clearInterval(pollTimer);
     const c = claims();
+    document.body.classList.toggle("signed-out", !c);
     document.getElementById("who").textContent = c ? `${c.email || ""} (${c["custom:org_id"] || "org_default"})` : "";
     document.getElementById("logout").hidden = !c;
     document.querySelector(".primary-nav").hidden = !c;

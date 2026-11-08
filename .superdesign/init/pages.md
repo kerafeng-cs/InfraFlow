@@ -11,4 +11,4 @@ Every management route uses `web/index.html` → `web/style.css`, `web/config.js
 - `#/admin` Admin: `adminView` → API helper, fmt.
 - `sleep.html` Public Wake: `web/sleep.html` → `web/style.css`, `web/config.js`, `web/sleep.js`.
 
-No image or font asset is used. Current brand mark is a styled letter I, not an official uploaded logo.
+No image asset is used. IBM Plex Sans Latin/Vietnamese webfonts are self-hosted in `web/fonts/` with an OFL license. The brand is text with a blue rule, not an official logo asset.
