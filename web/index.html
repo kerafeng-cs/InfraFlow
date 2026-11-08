@@ -8,12 +8,11 @@
   <script src="config.js"></script>
 </head>
 <body>
-  <header>
-    <h1>InfraFlow</h1>
-    <nav class="row"><a href="#/">Leases</a><a href="#/new">New Lease</a><a href="#/compose">Compose</a><a href="#/admin">Admin</a></nav>
-    <span class="sp"></span>
-    <span id="who" class="muted"></span>
-    <button id="logout" hidden>Sign out</button>
+  <a class="skip-link" href="#view">Skip to main content</a>
+  <header class="app-header">
+    <a class="brand" href="#/" aria-label="InfraFlow home"><span class="brand-mark" aria-hidden="true">I</span>InfraFlow</a>
+    <nav class="primary-nav" aria-label="Primary navigation" hidden><a href="#/">Leases</a><a href="#/new">Create Lease</a><a href="#/compose">Blueprint check</a><a href="#/admin">Admin</a></nav>
+    <div class="header-user"><span id="who" class="muted"></span><button id="logout" hidden>Sign out</button></div>
   </header>
   <main id="view"></main>
   <script src="app.js"></script>
