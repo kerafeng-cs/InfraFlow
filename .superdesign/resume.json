@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "/": {
+      "targetKind": "existing-ui",
+      "projectId": "2731882e-728f-4f6a-bfd7-db7ffc5b4b44",
+      "activeDraftId": "cea45fa6-475e-4416-bd84-55c4188de9a7",
+      "designSystemPath": ".superdesign/design-system.md",
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "web/index.html",
+        "web/app.js",
+        "web/style.css"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "2823b2d27d29e175c98894a3bea6af36325462e63e245a87b1e98e0f5028d96d",
+        "web/index.html": "a22bd0b48bb50d48ccb2a35f6f9ea64c4eace892881a8b4380d35e97d5a4d1d0",
+        "web/app.js": "78661794a959595c3b68cf033bbd361b58611cc15a3061a9cafe9d956c88327e",
+        "web/style.css": "7e103d26adbcb3f9a54663df1cec2856d30dcbddbc4429bb4ffbd3b2a5a4f698"
+      },
+      "drafts": {
+        "cea45fa6-475e-4416-bd84-55c4188de9a7": {
+          "title": "InfraFlow Environments v2",
+          "visualDirection": "navy operations console, calm light workspace",
+          "currentVersion": 1
+        }
+      },
+      "updatedAt": "2026-11-08T16:01:13.690764+00:00"
+    }
+  }
+}

@@ -64,11 +64,11 @@
 
   // ---------------- views ----------------
   async function environmentsView() {
-    view.innerHTML = `<div class="page-intro"><p class="eyebrow">Operations workspace</p><h1 class="page-title">Environments</h1>
-      <p class="page-summary">Find environments that need attention, check the last observation, and open details before changing state.</p></div>
-      <div class="panel"><div class="panel-head"><div><h2>Your Environments</h2><p class="panel-subtitle">Blocked and unknown states appear first.</p></div><a class="btn primary" href="#/new">Create Lease</a></div>
-        <div id="env-filters" class="row" hidden><div><label for="env-search">Search Environment or Lease</label><input id="env-search" type="search" autocomplete="off" placeholder="Search by name…"></div>
-          <div><label for="env-filter">Observed state</label><select id="env-filter"><option value="">All states</option><option value="BLOCKED">Blocked</option><option value="UNKNOWN">Unknown</option><option value="CHANGING">Changing</option><option value="AWAKE">Awake</option><option value="SLEEPING">Sleeping</option></select></div></div>
+    view.innerHTML = `<div class="page-intro with-action"><div><p class="eyebrow">Operations workspace</p><h1 class="page-title">Environments</h1>
+      <p class="page-summary">Find environments that need attention, check the last observation, and open details before changing state.</p></div><a class="btn primary" href="#/new">Create Lease</a></div>
+      <div class="panel environment-panel"><div class="panel-head"><div><h2>Your Environments</h2><p class="panel-subtitle">Blocked and unknown states appear first.</p></div></div>
+        <div id="env-filters" class="row env-filters" hidden><div><label for="env-search">Search Environment or Lease</label><input id="env-search" name="search" type="search" autocomplete="off" placeholder="Search by name…"></div>
+          <div><label for="env-filter">Observed state</label><select id="env-filter" name="state"><option value="">All states</option><option value="BLOCKED">Blocked</option><option value="UNKNOWN">Unknown</option><option value="CHANGING">Changing</option><option value="AWAKE">Awake</option><option value="SLEEPING">Sleeping</option></select></div></div>
         <div id="env-list" role="status">Loading Environments…</div></div>`;
     try {
       const leases = (await api("GET", "/v1/leases")).items || [];
@@ -82,17 +82,24 @@
       if (failures) container.insertAdjacentHTML("beforebegin", `<div class="alert" role="alert">Could not load ${failures} Lease${failures === 1 ? "" : "s"}. Refresh the page to see the full list.</div>`);
       if (!rows.length) { container.innerHTML = `<p class="muted">No Environments could be loaded. Refresh the page or open a Lease directly.</p>`; return; }
       document.getElementById("env-filters").hidden = false;
+      const params = new URLSearchParams((location.hash.split("?")[1] || ""));
+      document.getElementById("env-search").value = params.get("search") || "";
+      if ([...document.getElementById("env-filter").options].some((option) => option.value === params.get("state"))) document.getElementById("env-filter").value = params.get("state") || "";
       const render = () => {
         const search = document.getElementById("env-search").value.trim().toLowerCase();
         const state = document.getElementById("env-filter").value;
+        const nextParams = new URLSearchParams();
+        if (search) nextParams.set("search", search);
+        if (state) nextParams.set("state", state);
+        history.replaceState(null, "", `${location.pathname}${location.search}#/${nextParams.size ? `?${nextParams}` : ""}`);
         const filtered = rows.filter((e) => (!search || `${e.name} ${e.environment_id} ${e.lease.name}`.toLowerCase().includes(search)) && (!state || e.availability === state));
         container.innerHTML = filtered.length ? `<p class="field-note">${filtered.length} of ${rows.length} Environments</p><div class="table-wrap environment-table"><table>
-          <tr><th>Environment</th><th>Lease</th><th>Observed / desired</th><th>Operation</th><th>Last check</th></tr>${filtered.map((e) => `<tr>
+          <tr><th>Environment</th><th>Lease</th><th>Observed / desired</th><th>Operation</th><th>Last check</th></tr>${filtered.map((e) => `<tr class="${e.availability === "BLOCKED" ? "attention-blocked" : e.active_operation_id ? "attention-changing" : ""}">
             <td data-label="Environment"><a href="#/environment/${encodeURIComponent(e.environment_id)}"><strong>${esc(e.name)}</strong></a><br><code>${esc(e.environment_id)}</code></td>
             <td data-label="Lease"><a href="#/lease/${encodeURIComponent(e.lease.lease_id)}">${esc(e.lease.name)}</a><br><span class="field-note">Expires ${fmt(e.lease.expires_at)}</span></td>
             <td data-label="Observed / desired">${badge(e.availability)}<br><span class="field-note">Desired: ${esc(e.desired || "Not set")}</span></td>
             <td data-label="Operation">${e.active_operation_id ? `<code>${esc(e.active_operation_id)}</code>` : `<span class="muted">None running</span>`}</td>
-            <td data-label="Last check">${fmt(e.observed_at)}</td></tr>`).join("")}</table></div>` : `<div class="empty"><strong>No matching Environments</strong><p>Try a different name or state.</p></div>`;
+            <td data-label="Last check">${fmt(e.observed_at)}</td></tr>`).join("")}</table></div><p class="field-note">Observation time comes from the last resource check. Desired state is not proof of completion.</p>` : `<div class="empty"><strong>No matching Environments</strong><p>Try a different name or state.</p></div>`;
       };
       document.getElementById("env-search").oninput = render;
       document.getElementById("env-filter").onchange = render;
@@ -403,7 +410,7 @@
     if (!c) { document.title = "Sign in · InfraFlow"; return loginView(); }
     const h = location.hash || "#/";
     document.querySelectorAll(".primary-nav a").forEach((a) => {
-      const selected = h === a.getAttribute("href") || (h.startsWith("#/lease/") && a.getAttribute("href") === "#/leases") || (h.startsWith("#/environment/") && a.getAttribute("href") === "#/");
+      const selected = h === a.getAttribute("href") || (h.startsWith("#/?") && a.getAttribute("href") === "#/") || (h.startsWith("#/lease/") && a.getAttribute("href") === "#/leases") || (h.startsWith("#/environment/") && a.getAttribute("href") === "#/");
       if (selected) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     });
     document.title = h.startsWith("#/lease/") ? "Lease · InfraFlow" : h.startsWith("#/environment/") ? "Environment · InfraFlow" : `${h === "#/new" ? "Create Lease" : h === "#/admin" ? "Admin" : h === "#/compose" ? "Blueprint check" : h === "#/leases" ? "Leases" : "Environments"} · InfraFlow`;
