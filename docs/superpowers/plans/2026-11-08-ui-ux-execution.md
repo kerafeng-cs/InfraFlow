@@ -61,3 +61,18 @@
 3. Expose operation stage progress through an API field if the detail page should show live step-by-step progress. Current operation history may include a plan, but it is not proof of executed stages.
 4. Cost data is an InfraFlow estimate from unit prices and transition logs; AWS billed charges and residual resources need a separate source and UX treatment.
 5. Review accessibility and copy with actual end users, and run the console against a connected staging API before release. Mocked browser responses cannot prove live behavior.
+
+## Continuation — Create and destructive-action review
+
+- [x] Match the list page to the real `GET /v1/leases` shape; this endpoint returns Environment names without IDs, so the list links to the Lease and the Lease detail links to Environment detail.
+- [x] Validate Create form against current Lease/environment name, duration, port and on-demand idle rules. Stop submission when the certified Blueprint catalog is empty or unavailable.
+- [x] Add an explicit Create review step. Keep the same idempotency key when retrying an unchanged request after an uncertain network result.
+- [x] Move Lease-row Wake/Sleep actions to Environment Detail so the user sees current observation and operation state before submitting.
+- [x] Add an inline Reclaim review with the full Environment list, final-backup policy and an acknowledgement. The UI labels missing verified resource inventory; backend must supply it before a production safety claim.
+- [x] Keep Wake/Sleep disabled after an uncertain request result until the user refreshes and checks history.
+- [x] Mocked browser check at 1440px and 375px: Create first click sends zero POSTs, second click sends one; Reclaim submit stays disabled before acknowledgement.
+- [x] Make Environments the default console page. Keep Leases in its own route. Search by Environment/Lease and filter observed state, with blocked and unknown items first.
+- [x] Browser-check the Environments list and BLOCKED filter at desktop and phone widths, including no horizontal page overflow.
+- [x] Verify an API 401 returns the user to the sign-in form after an in-flight view request fails.
+
+**Scaling note:** The current `GET /v1/leases` response omits Environment IDs and detailed observations. The Environments page therefore reads each Lease detail to build the list. Add an authorized paginated Environment-list endpoint before this is used at large organization scale; do not derive IDs from names in the browser.
