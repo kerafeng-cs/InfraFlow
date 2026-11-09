@@ -53,10 +53,12 @@
   const dateTime = new Intl.DateTimeFormat(navigator.language || "en", { dateStyle: "medium", timeStyle: "short" });
   const number = new Intl.NumberFormat(navigator.language || "en", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmt = (iso) => (iso ? dateTime.format(new Date(iso)) : "-");
-  const badge = (a) => {
+  const badge = (a, context = "") => {
     const k = String(a || "").split(":")[0];
-    return `<span class="badge b-${esc(k)}">${esc(a || "-")}</span>`;
+    return `<span class="badge b-${esc(k)}${context ? ` b-${esc(context)}-${esc(k)}` : ""}">${esc(a || "-")}</span>`;
   };
+  const icon = (name, extraClass = "button-icon") => `<svg class="${extraClass}" aria-hidden="true"><use href="#icon-${name}"/></svg>`;
+  const brand = `<div class="login-brand"><span class="brand-mark">${icon("cube")}</span>InfraFlow</div>`;
   const CLASS = { network: "free", egress: "hourly_no_data", database: "data", app: "stoppable", entry: "hourly_no_data" };
   const insts = (m) => Object.entries(m || {}).map(([k, v]) => `<span class="inst c-${CLASS[k] || ""}">${esc(k)}: ${esc(v)}</span>`).join("");
   const toLocalInput = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
@@ -66,16 +68,29 @@
   async function environmentsView() {
     view.innerHTML = `<div class="page-intro with-action"><div><p class="eyebrow">Operations workspace</p><h1 class="page-title">Environments</h1>
       <p class="page-summary">Find environments that need attention, check the last observation, and open details before changing state.</p></div><a class="btn primary" href="#/new">Create Lease</a></div>
+      <div id="env-summary" class="summary-grid" aria-label="Environment summary"></div><p id="env-summary-note" class="summary-note" hidden></p>
       <div class="panel environment-panel"><div class="panel-head"><div><h2>Your Environments</h2><p class="panel-subtitle">Blocked and unknown states appear first.</p></div></div>
-        <div id="env-filters" class="row env-filters" hidden><div><label for="env-search">Search Environment or Lease</label><input id="env-search" name="search" type="search" autocomplete="off" placeholder="Search by name…"></div>
+        <div id="env-filters" class="row env-filters" hidden><div><label for="env-search">Search Environment or Lease</label><div class="search-control">${icon("search", "search-icon")}<input id="env-search" name="search" type="search" autocomplete="off" placeholder="Search by name…"></div></div>
           <div><label for="env-filter">Observed state</label><select id="env-filter" name="state"><option value="">All states</option><option value="BLOCKED">Blocked</option><option value="UNKNOWN">Unknown</option><option value="CHANGING">Changing</option><option value="AWAKE">Awake</option><option value="SLEEPING">Sleeping</option></select></div></div>
         <div id="env-list" role="status">Loading Environments…</div></div>`;
+    const renderSummary = (rows, failures = 0) => {
+      const count = (predicate) => rows.filter(predicate).length;
+      const cards = [
+        ["Total Environments", rows.length, "total", "grid"],
+        ["Awake", count((e) => e.availability === "AWAKE"), "awake", "check"],
+        ["Sleeping", count((e) => e.availability === "SLEEPING" || String(e.availability || "").startsWith("ASLEEP")), "sleeping", "cube"],
+        ["Needs Attention / Blocked", count((e) => ["BLOCKED", "UNKNOWN"].includes(e.availability)), "attention", "settings"],
+      ];
+      document.getElementById("env-summary").innerHTML = cards.map(([label, value, type, symbol]) => `<div class="summary-card ${type}"><span class="summary-icon">${icon(symbol, "")}</span><small>${label}</small><strong>${value}</strong></div>`).join("");
+      if (failures) { const note = document.getElementById("env-summary-note"); note.hidden = false; note.textContent = `Counts include loaded Environments only. ${failures} Lease${failures === 1 ? "" : "s"} could not be loaded.`; }
+    };
     try {
       const leases = (await api("GET", "/v1/leases")).items || [];
-      if (!leases.length) { document.getElementById("env-list").innerHTML = `<div class="empty"><strong>No Environments yet</strong><p>Create a Lease to set up your first Environment.</p><a class="btn primary" href="#/new">Create Lease</a></div>`; return; }
+      if (!leases.length) { renderSummary([]); document.getElementById("env-list").innerHTML = `<div class="empty"><strong>No Environments yet</strong><p>Create a Lease to set up your first Environment.</p><a class="btn primary" href="#/new">Create Lease</a></div>`; return; }
       const results = await Promise.allSettled(leases.map((lease) => api("GET", `/v1/leases/${encodeURIComponent(lease.lease_id)}`)));
       const rows = results.flatMap((result) => result.status === "fulfilled" ? result.value.environments.map((env) => ({ ...env, lease: result.value })) : []);
       const failures = results.filter((result) => result.status === "rejected").length;
+      renderSummary(rows, failures);
       const priority = (e) => e.availability === "BLOCKED" ? 0 : e.availability === "UNKNOWN" || !e.observed_at ? 1 : e.active_operation_id ? 2 : 3;
       rows.sort((a, b) => priority(a) - priority(b) || new Date(a.lease.expires_at) - new Date(b.lease.expires_at) || a.name.localeCompare(b.name));
       const container = document.getElementById("env-list");
@@ -92,14 +107,14 @@
         if (search) nextParams.set("search", search);
         if (state) nextParams.set("state", state);
         history.replaceState(null, "", `${location.pathname}${location.search}#/${nextParams.size ? `?${nextParams}` : ""}`);
-        const filtered = rows.filter((e) => (!search || `${e.name} ${e.environment_id} ${e.lease.name}`.toLowerCase().includes(search)) && (!state || e.availability === state));
+        const filtered = rows.filter((e) => (!search || `${e.name} ${e.environment_id} ${e.lease.name}`.toLowerCase().includes(search)) && (!state || (state === "SLEEPING" ? e.availability === "SLEEPING" || String(e.availability || "").startsWith("ASLEEP") : e.availability === state)));
         container.innerHTML = filtered.length ? `<p class="field-note">${filtered.length} of ${rows.length} Environments</p><div class="table-wrap environment-table"><table>
-          <tr><th>Environment</th><th>Lease</th><th>Observed / desired</th><th>Operation</th><th>Last check</th></tr>${filtered.map((e) => `<tr class="${e.availability === "BLOCKED" ? "attention-blocked" : e.active_operation_id ? "attention-changing" : ""}">
-            <td data-label="Environment"><a href="#/environment/${encodeURIComponent(e.environment_id)}"><strong>${esc(e.name)}</strong></a><br><code>${esc(e.environment_id)}</code></td>
-            <td data-label="Lease"><a href="#/lease/${encodeURIComponent(e.lease.lease_id)}">${esc(e.lease.name)}</a><br><span class="field-note">Expires ${fmt(e.lease.expires_at)}</span></td>
+          <tr><th>Environment</th><th>Lease</th><th>Observed / desired</th><th>Operation</th><th>Last check</th><th>Action</th></tr>${filtered.map((e) => `<tr class="${e.availability === "BLOCKED" ? "attention-blocked" : e.active_operation_id ? "attention-changing" : ""}">
+            <td data-label="Environment"><a class="table-name" href="#/environment/${encodeURIComponent(e.environment_id)}">${esc(e.name)}</a><br><code>${esc(e.environment_id)}</code></td>
+            <td data-label="Lease"><a class="table-name" href="#/lease/${encodeURIComponent(e.lease.lease_id)}">${esc(e.lease.name)}</a><br><span class="field-note">Expires ${fmt(e.lease.expires_at)}</span></td>
             <td data-label="Observed / desired">${badge(e.availability)}<br><span class="field-note">Desired: ${esc(e.desired || "Not set")}</span></td>
             <td data-label="Operation">${e.active_operation_id ? `<code>${esc(e.active_operation_id)}</code>` : `<span class="muted">None running</span>`}</td>
-            <td data-label="Last check">${fmt(e.observed_at)}</td></tr>`).join("")}</table></div><p class="field-note">Observation time comes from the last resource check. Desired state is not proof of completion.</p>` : `<div class="empty"><strong>No matching Environments</strong><p>Try a different name or state.</p></div>`;
+            <td data-label="Last check">${fmt(e.observed_at)}</td><td data-label="Action"><a class="row-action" href="#/environment/${encodeURIComponent(e.environment_id)}">View details →</a></td></tr>`).join("")}</table></div><p class="field-note">Observation time comes from the last resource check. Desired state is not proof of completion.</p>` : `<div class="empty"><strong>No matching Environments</strong><p>Try a different name or state.</p></div>`;
       };
       document.getElementById("env-search").oninput = render;
       document.getElementById("env-filter").onchange = render;
@@ -110,13 +125,13 @@
   function loginView() {
     if (!cfg.apiUrl || !cfg.region || !cfg.clientId) {
       document.title = "Connection unavailable · InfraFlow";
-      view.innerHTML = `<div class="panel login-panel" role="status">
+      view.innerHTML = `${brand}<div class="panel login-panel" role="status">
         <h1 class="page-title">Console unavailable</h1>
         <p class="muted">This preview is not connected to an InfraFlow environment. Open the deployed console URL to sign in.</p>
       </div>`;
       return;
     }
-    view.innerHTML = `
+    view.innerHTML = `${brand}
       <div class="panel login-panel">
         <h1 class="page-title">Sign in</h1>
         <p class="muted">Manage your staging environments and review each operation.</p>
@@ -168,7 +183,7 @@
       document.getElementById("list").innerHTML = r.items.length === 0
         ? `<div class="empty"><strong>No Leases yet</strong><p>Create a Lease to set up your first environment.</p><a class="btn primary" href="#/new">Create Lease</a></div>`
         : `<div class="table-wrap"><table><tr><th>Name</th><th>Blueprint</th><th>Environments</th><th>Mode</th><th>Expires</th></tr>${r.items.map((l) => `
-          <tr><td><a href="#/lease/${esc(l.lease_id)}">${esc(l.name)}</a></td><td>${esc(l.blueprint_ref)}</td>
+          <tr><td><a class="table-name" href="#/lease/${esc(l.lease_id)}">${esc(l.name)}</a></td><td>${esc(l.blueprint_ref)}</td>
           <td>${l.environments.map((e) => `${esc(e.name)} ${badge(e.availability)}`).join("<br>")}</td>
           <td>${esc(l.mode)}</td><td>${fmt(l.expires_at)}</td></tr>`).join("")}</table></div>`;
     } catch (e) { fail(e); }
@@ -177,34 +192,34 @@
   async function createView() {
     const now = new Date(); const later = new Date(now.getTime() + 30 * 864e5);
     view.innerHTML = `<div class="page-intro"><p class="eyebrow">Create</p><h1 class="page-title">New Lease</h1>
-      <p class="page-summary">Define the environments, lifetime, and data policy before provisioning begins.</p></div><div class="panel"><h2>Lease details</h2><form id="create-form">
-      <div class="grid">
-        <div><label for="name">Lease name (2–16 lowercase letters or digits)</label><input id="name" placeholder="acme" required pattern="[a-z][a-z0-9]{1,15}" autocomplete="off"></div>
+      <p class="page-summary">Define the environments, lifetime, and data policy before provisioning begins.</p></div><div class="panel create-panel"><h2>Lease details</h2><form id="create-form">
+      <section class="form-section"><h3>General &amp; Blueprint</h3><div class="form-grid">
+        <div class="span-full"><label for="name">Lease name (2–16 lowercase letters or digits)</label><input id="name" placeholder="acme" required pattern="[a-z][a-z0-9]{1,15}" autocomplete="off"></div>
         <div><label for="bp">Blueprint</label><select id="bp"></select></div>
         <div><label for="size">Size</label><select id="size"><option>small</option><option>medium</option></select></div>
-        <div><label for="envs">Environments (1–5 distinct names, up to 8 letters or digits each)</label><input id="envs" value="dev,qa" required autocomplete="off" aria-describedby="msg"></div>
+        <div class="span-full"><label for="envs">Environments (1–5 distinct names, up to 8 letters or digits each)</label><input id="envs" value="dev,qa" required autocomplete="off" aria-describedby="msg"></div>
+      </div></section>
+      <section class="form-section"><h3>Lifecycle Window</h3><div class="form-grid lifecycle-grid">
         <div><label for="start">Starts</label><input id="start" type="datetime-local" value="${toLocalInput(now)}" required></div>
         <div><label for="end">Expires</label><input id="end" type="datetime-local" value="${toLocalInput(later)}" required aria-describedby="msg"></div>
-      </div>
-      <h3>Application (Docker image, linux/amd64)</h3>
-      <div class="grid">
-        <div><label for="image">Image</label><input id="image" value="ghcr.io/kerafeng-cs/infraflow-demo-app:1" style="width:100%"></div>
+      </div></section>
+      <section class="form-section"><h3>Application Workload</h3><p class="panel-subtitle">Docker image, linux/amd64</p><div class="form-grid">
+        <div class="span-full"><label for="image">Image</label><input id="image" value="ghcr.io/kerafeng-cs/infraflow-demo-app:1"></div>
         <div><label for="port">Port</label><input id="port" type="number" min="1" max="65535" value="8080" required></div>
         <div><label for="health">Health path</label><input id="health" value="/healthz" required pattern="/.*"></div>
-      </div>
-      <h3>Activity policy</h3>
-      <div class="grid">
+      </div></section>
+      <section class="form-section"><h3>Activity policy</h3><div class="form-grid">
         <div><label for="mode">Mode</label><select id="mode"><option value="schedule">Schedule</option><option value="on_demand">On demand</option></select></div>
         <div><label for="idle" id="idle-label">Sleep when idle after (minutes; optional)</label><input id="idle" type="number" min="1" placeholder="For example, 90…" aria-describedby="msg"></div>
       </div>
-      <div class="grid activity-schedule" id="schedule-fields">
-        <div><label for="from">Awake from (UTC+7)</label><input id="from" type="time" value="08:00"><label for="to">Awake until (UTC+7)</label><input id="to" type="time" value="19:00" aria-describedby="msg"></div>
-        <div><label for="days">Days (1 = Monday to 7 = Sunday)</label><input id="days" value="1,2,3,4,5" autocomplete="off" aria-describedby="msg"></div>
-      </div>
-      <h3>Data at expiry</h3>
-      <label><input type="checkbox" id="keep" checked> Keep a final backup (database snapshot)</label>
+      <div id="schedule-fields" class="activity-schedule"><div class="form-grid">
+        <div><label for="from">Awake from (UTC+7)</label><input id="from" type="time" value="08:00"></div>
+        <div><label for="to">Awake until (UTC+7)</label><input id="to" type="time" value="19:00" aria-describedby="msg"></div>
+        <div class="span-full"><span id="days-label" class="field-label">Awake days (1 = Monday to 7 = Sunday)</span><input id="days" type="hidden" value="1,2,3,4,5"><div id="day-pills" class="day-selector" role="group" aria-labelledby="days-label" aria-describedby="msg" tabindex="-1">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day, index) => `<button type="button" data-day="${index + 1}" aria-label="${["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][index]}" aria-pressed="${index < 5}">${day}</button>`).join("")}</div></div>
+      </div></div></section>
+      <section class="form-section"><h3>Data at expiry</h3><label class="check-line"><input type="checkbox" id="keep" checked> Keep a final backup (database snapshot)</label></section>
       <div id="create-review" class="review-box" hidden></div>
-      <p class="row"><button class="primary" id="create" type="submit">Review Lease</button><span id="msg" class="err" role="alert" tabindex="-1"></span></p></form></div>`;
+      <button class="primary create-submit" id="create" type="submit">Review Lease</button><p id="msg" class="err" role="alert" tabindex="-1"></p></form></div>`;
     try {
       const c = await api("GET", "/v1/catalog/blueprints");
       document.getElementById("bp").innerHTML = c.items.map((b) => `<option value="${esc(b.ref)}">${esc(b.ref)}</option>`).join("");
@@ -220,6 +235,11 @@
     };
     document.getElementById("mode").addEventListener("change", syncMode);
     syncMode();
+    document.querySelectorAll("#day-pills button").forEach((button) => { button.onclick = () => {
+      button.setAttribute("aria-pressed", String(button.getAttribute("aria-pressed") !== "true"));
+      const days = [...document.querySelectorAll("#day-pills button[aria-pressed='true']")].map((selected) => selected.dataset.day);
+      const field = document.getElementById("days"); field.value = days.join(","); field.dispatchEvent(new Event("input", { bubbles: true }));
+    }; });
     let reviewed = false; let createKey = null;
     form.addEventListener("input", () => { reviewed = false; createKey = null; document.getElementById("create-review").hidden = true; document.getElementById("create").textContent = "Review Lease"; document.getElementById("msg").textContent = ""; });
     document.getElementById("create-form").onsubmit = async (event) => {
@@ -237,7 +257,7 @@
       const policy = { mode: v("mode"), utc_offset_minutes: 420 };
       if (policy.mode === "schedule") {
         const days = v("days").split(",").map((x) => x.trim());
-        if (days.length > 7 || days.some((x) => !/^[1-7]$/.test(x)) || new Set(days).size !== days.length) { invalidField = "days"; throw new Error("Enter distinct schedule days from 1 (Monday) to 7 (Sunday), separated by commas."); }
+        if (days.length > 7 || days.some((x) => !/^[1-7]$/.test(x)) || new Set(days).size !== days.length) { invalidField = "day-pills"; throw new Error("Select at least one awake day."); }
         if (v("from") >= v("to")) { invalidField = "to"; throw new Error("The scheduled awake end time must be after the start time."); }
         policy.schedule = { days: days.map(Number), start: v("from"), end: v("to") };
       }
@@ -250,7 +270,14 @@
       document.getElementById("msg").textContent = "";
       if (!reviewed) {
         const review = document.getElementById("create-review");
-        review.innerHTML = `<h3 tabindex="-1">Review Before Creating</h3><p><strong>${esc(body.name)}</strong> · ${esc(body.blueprint_ref)} · ${esc(body.parameters.size)} · ${names.map(esc).join(", ")}</p><p>From ${fmt(body.starts_at)} to ${fmt(body.expires_at)} · ${esc(policy.mode)} · Final database backup: ${body.data_policy.keep_final_backup ? "keep" : "do not keep"}</p><p>Image: <code>${esc(body.app.image)}</code> · Port ${esc(body.app.port)} · Health path <code>${esc(body.app.health_path)}</code></p><p>${policy.mode === "schedule" ? `Awake ${esc(policy.schedule.start)}–${esc(policy.schedule.end)} (UTC+7), days ${esc(policy.schedule.days.join(", "))}${policy.idle_timeout_minutes ? `; sleep after ${esc(policy.idle_timeout_minutes)} idle minutes` : ""}` : `Sleep after ${esc(policy.idle_timeout_minutes)} idle minutes`}</p><p class="muted">Submitting creates the Lease and starts provisioning operations. Check their outcomes on each Environment.</p>`;
+        const receipt = [
+          ["Lease", body.name], ["Blueprint", body.blueprint_ref], ["Size", body.parameters.size], ["Environments", names.join(", ")],
+          ["Starts", fmt(body.starts_at)], ["Expires", fmt(body.expires_at)], ["Mode", policy.mode === "schedule" ? "Schedule" : "On demand"],
+          ...(policy.mode === "schedule" ? [["Awake window", `${policy.schedule.start}–${policy.schedule.end} (UTC+7)`], ["Awake days", policy.schedule.days.map((day) => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][day - 1]).join(", ")]] : []),
+          ["Idle sleep", policy.idle_timeout_minutes ? `${policy.idle_timeout_minutes} minutes` : "Off"], ["Final backup", body.data_policy.keep_final_backup ? "Keep" : "Do not keep"],
+          ["Image", body.app.image, true], ["Port", body.app.port, true], ["Health path", body.app.health_path, true],
+        ];
+        review.innerHTML = `<h3 tabindex="-1">Review Before Creating</h3><dl class="review-grid">${receipt.map(([label, value, code]) => `<div><dt>${esc(label)}</dt><dd>${code ? `<code>${esc(value)}</code>` : esc(value)}</dd></div>`).join("")}</dl><p class="muted">Submitting creates the Lease and starts provisioning operations. Check their outcomes on each Environment.</p>`;
         review.hidden = false; reviewed = true; createKey = crypto.randomUUID(); submit.textContent = "Create Lease and Start Provisioning"; review.scrollIntoView({ block: "nearest" }); review.querySelector("h3").focus({ preventScroll: true }); return;
       }
       submit.disabled = true; submit.textContent = "Submitting Request…";
@@ -282,7 +309,7 @@
         <div class="panel"><div class="panel-head"><div><h2>Environments</h2><p class="panel-subtitle">Observed state and requested state are shown separately.</p></div></div><div class="table-wrap environment-table"><table>
           <tr><th>Name</th><th>Observed / desired</th><th>URL</th><th>Resources / last check</th><th>Actions</th></tr>
           ${l.environments.map((e) => `<tr>
-            <td data-label="Environment"><a href="#/environment/${encodeURIComponent(e.environment_id)}"><b>${esc(e.name)}</b></a><br><code>${esc(e.environment_id)}</code></td>
+            <td data-label="Environment"><a class="table-name" href="#/environment/${encodeURIComponent(e.environment_id)}">${esc(e.name)}</a><br><code>${esc(e.environment_id)}</code></td>
             <td data-label="Observed / desired">${badge(e.availability)}<br><span class="muted">Desired: ${esc(e.desired || "Not set")}</span>
               ${e.blocked_reason ? `<div class="err">${esc(e.blocked_reason.code)}: ${esc(String(e.blocked_reason.detail || "").slice(0, 200))}</div>` : ""}</td>
             <td data-label="URL"><a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">Public URL</a>${e.app_url ? `<br><a href="${esc(e.app_url)}" target="_blank" rel="noopener noreferrer" class="muted">Application URL</a>` : ""}</td>
@@ -335,24 +362,24 @@
         <div class="page-intro"><p class="eyebrow"><a href="#/">Environments</a> / <a href="#/lease/${encodeURIComponent(e.lease_id)}">Lease</a> / Environment</p>
           <h1 class="page-title">${esc(e.name)}</h1><p class="page-summary">${esc(e.environment_id)} · Checked ${fmt(e.observed_at)}</p></div>
         ${blocked ? `<div class="alert" role="alert"><strong>Environment blocked</strong><p>${esc(e.blocked_reason && e.blocked_reason.code || "Investigation required")}: ${esc(e.blocked_reason && e.blocked_reason.detail || "Check the operation history and contact an administrator.")}</p></div>` : ""}
-        <div class="panel"><div class="panel-head"><div><h2>Current state</h2><p class="panel-subtitle">Management, observation, and requested state can differ while work is running.</p></div><button id="refresh" type="button">Refresh status</button></div>
+        <div class="panel"><div class="panel-head state-panel-head"><h2>Current state</h2><button id="refresh" type="button" aria-label="Refresh status">${icon("refresh")}<span class="refresh-label">Refresh status</span></button></div><p class="panel-subtitle">Management, observation, and requested state can differ while work is running.</p>
           <div class="state-grid">
             <div class="status-item"><small>Management</small>${badge(e.status)}<p class="field-note">Current lifecycle record</p></div>
             <div class="status-item"><small>Observed availability</small>${badge(e.availability)}<p class="field-note">Resources checked ${fmt(e.observed_at)}</p></div>
             <div class="status-item"><small>Observed level</small><strong>${esc(e.actual || "Unavailable")}</strong><p class="field-note">From last resource observation</p></div>
             <div class="status-item"><small>Desired level</small><strong>${esc(e.desired || "Not set")}</strong><p class="field-note">Source: ${esc(e.desired_source || "Unavailable")}</p></div>
           </div>
-          ${active ? `<div class="operation-banner" role="status"><strong>Operation ${badge(active.status)}</strong><span>${esc(active.action || "Change")} ${active.target_level ? `→ ${esc(active.target_level)}` : ""} · Requested ${fmt(active.requested_at)}</span><code>${esc(active.operation_id)}</code></div>` : e.active_operation_id ? `<div class="operation-banner" role="status">Operation ${esc(e.active_operation_id)} is active. Refresh to check its outcome.</div>` : ""}
+          ${active ? `<div class="operation-banner" role="status"><strong>Operation ${badge(active.status, "operation")}</strong><span>${esc(active.action || "Change")} ${active.target_level ? `→ ${esc(active.target_level)}` : ""} · Requested ${fmt(active.requested_at)}</span><code>${esc(active.operation_id)}</code></div>` : e.active_operation_id ? `<div class="operation-banner" role="status">Operation ${esc(e.active_operation_id)} is active. Refresh to check its outcome.</div>` : ""}
         </div>
         <div class="panel"><h2>Access and actions</h2><p class="panel-subtitle">A submitted action starts an operation. Check observed state and history for completion.</p>
-          <p class="row"><a class="btn" href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">Open public URL</a>${e.app_url ? `<a class="btn" href="${esc(e.app_url)}" target="_blank" rel="noopener noreferrer">Open application</a>` : ""}</p>
-          ${blocked || terminal ? `<p class="muted">${blocked ? "Actions are unavailable while this environment is blocked." : "This environment has been reclaimed."}</p>` : `<div class="row"><button id="wake" type="button" ${e.active_operation_id ? "disabled" : ""}>Wake environment</button><button id="sleep" type="button" ${e.active_operation_id ? "disabled" : ""}>Sleep environment</button></div>`}
+          <p class="row"><a class="btn public-link" href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${icon("external")}Open public URL</a>${e.app_url ? `<a class="btn" href="${esc(e.app_url)}" target="_blank" rel="noopener noreferrer">${icon("external")}Open application</a>` : ""}</p>
+          ${blocked || terminal ? `<p class="muted">${blocked ? "Actions are unavailable while this environment is blocked." : "This environment has been reclaimed."}</p>` : `<div class="action-grid"><button id="wake" type="button" ${e.active_operation_id ? "disabled" : ""}>Wake environment</button><button id="sleep" type="button" ${e.active_operation_id ? "disabled" : ""}>Sleep environment</button></div>`}
           <div id="action-result" role="status" aria-live="polite"></div>
         </div>
         <div class="panel"><h2>Resources</h2><p class="panel-subtitle">Last observed state; it may lag behind a requested change.</p>
-          <div class="resource-list">${Object.entries(e.instances || {}).length ? Object.entries(e.instances).map(([name, state]) => `<div class="resource-item"><strong>${esc(name)}</strong><span>${esc(state)}</span></div>`).join("") : `<p class="muted">No resource observation available.</p>`}</div>
+          <div class="resource-list">${Object.entries(e.instances || {}).length ? Object.entries(e.instances).map(([name, state]) => `<div class="resource-item"><strong>${icon("cube")}${esc(name)}</strong>${badge(state, "resource")}</div>`).join("") : `<p class="muted">No resource observation available.</p>`}</div>
           <p class="field-note">Last activity: ${fmt(e.last_activity_at)} · Awake since: ${fmt(e.awake_since)}</p></div>
-        <div class="panel"><h2>Operation history</h2>${items.length ? `<ol class="operation-list">${items.map((o) => `<li><div class="row"><strong>${esc(o.action || "Change")} ${o.target_level ? `→ ${esc(o.target_level)}` : ""}</strong>${badge(o.status)}</div><p class="field-note">Requested ${fmt(o.requested_at)} · Started ${fmt(o.started_at)} · Finished ${fmt(o.finished_at)} · Source ${esc(o.source || "Unavailable")}</p>${o.error ? `<p class="err">${esc(o.error.code || "Operation error")}: ${esc(o.error.message || o.error.detail || "Review required")}</p>` : ""}<code>${esc(o.operation_id)}</code></li>`).join("")}</ol>` : `<p class="muted">No operations recorded for this environment.</p>`}</div>`;
+        <div class="panel"><h2>Operation history</h2>${items.length ? `<ol class="operation-list">${items.map((o) => `<li><div class="row"><strong>${esc(o.action || "Change")} ${o.target_level ? `→ ${esc(o.target_level)}` : ""}</strong>${badge(o.status, "operation")}</div><p class="field-note">Requested ${fmt(o.requested_at)} · Started ${fmt(o.started_at)} · Finished ${fmt(o.finished_at)} · Source ${esc(o.source || "Unavailable")}</p>${o.error ? `<p class="err">${esc(o.error.code || "Operation error")}: ${esc(o.error.message || o.error.detail || "Review required")}</p>` : ""}<code>${esc(o.operation_id)}</code></li>`).join("")}</ol>` : `<p class="muted">No operations recorded for this environment.</p>`}</div>`;
       document.getElementById("refresh").onclick = draw;
       for (const action of ["wake", "sleep"]) {
         const button = document.getElementById(action);
@@ -438,6 +465,7 @@
       const selected = h === a.getAttribute("href") || (h.startsWith("#/?") && a.getAttribute("href") === "#/") || (h.startsWith("#/lease/") && a.getAttribute("href") === "#/leases") || (h.startsWith("#/environment/") && a.getAttribute("href") === "#/");
       if (selected) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     });
+    if (window.matchMedia("(max-width: 900px)").matches) document.querySelector('.primary-nav a[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
     document.title = h.startsWith("#/lease/") ? "Lease · InfraFlow" : h.startsWith("#/environment/") ? "Environment · InfraFlow" : `${h === "#/new" ? "Create Lease" : h === "#/admin" ? "Admin" : h === "#/compose" ? "Blueprint check" : h === "#/leases" ? "Leases" : "Environments"} · InfraFlow`;
     let m;
     if (h === "#/new") return createView();
