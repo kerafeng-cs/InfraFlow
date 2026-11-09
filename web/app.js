@@ -65,13 +65,56 @@
   function fail(e) { view.insertAdjacentHTML("afterbegin", `<div class="alert" role="alert"><strong>Could not complete the request</strong><p>${esc(e.message || e)}</p></div>`); }
 
   // ---------------- views ----------------
+  async function overviewView() {
+    view.innerHTML = `<div class="page-intro with-action"><div><h1 class="page-title">Overview</h1>
+      <p class="page-summary">Your Leases and Environments at a glance. Open a Lease to review its resources and operations.</p></div>
+      <a class="btn primary" href="#/new">Create Lease</a></div>
+      <div id="overview-content"><p role="status">Loading overview…</p></div>`;
+    try {
+      const leases = (await api("GET", "/v1/leases")).items || [];
+      const environments = leases.flatMap((lease) => (lease.environments || []).map((env) => ({ ...env, lease })));
+      const asleep = (state) => state === "SLEEPING" || String(state || "").startsWith("ASLEEP");
+      const attention = environments.filter((env) => ["BLOCKED", "UNKNOWN"].includes(env.availability));
+      const groups = [
+        ["Awake", environments.filter((env) => env.availability === "AWAKE").length, "awake"],
+        ["Sleeping", environments.filter((env) => asleep(env.availability)).length, "sleeping"],
+        ["Changing", environments.filter((env) => env.availability === "CHANGING").length, "changing"],
+        ["Needs attention", attention.length, "attention"],
+      ];
+      const other = environments.length - groups.reduce((sum, group) => sum + group[1], 0);
+      if (other) groups.push(["Other states", other, "other"]);
+      const metrics = [
+        ["Total Leases", leases.length, "total", "list", "#/leases"],
+        ["Environments", environments.length, "total", "cube", "#/environments"],
+        ["Awake", groups[0][1], "awake", "check", "#/environments?state=AWAKE"],
+        ["Needs attention", attention.length, "attention", "settings", "#/environments?state=ATTENTION"],
+      ];
+      const ordered = [...leases].sort((a, b) => {
+        const count = (lease) => (lease.environments || []).filter((env) => ["BLOCKED", "UNKNOWN"].includes(env.availability)).length;
+        return count(b) - count(a) || new Date(a.expires_at) - new Date(b.expires_at);
+      });
+      document.getElementById("overview-content").innerHTML = `<div class="summary-grid" aria-label="Deployment summary">${metrics.map(([label, value, type, symbol, href]) => `<a class="summary-card overview-metric ${type}" href="${href}" aria-label="${label}: ${value}. View details"><span class="summary-icon">${icon(symbol, "")}</span><small>${label}</small><strong>${value}</strong></a>`).join("")}</div>
+        <div class="overview-panels">
+          <section class="panel"><div class="panel-head"><div><h2>Environment status</h2><p class="panel-subtitle">Based on the current Lease list. Requested state is not a completed operation.</p></div></div>
+            ${environments.length ? `<div class="status-distribution" role="img" aria-label="${groups.map(([label, value]) => `${label}: ${value}`).join(", ")}">${groups.filter(([, value]) => value).map(([, value, type]) => `<span class="distribution-${type}" style="flex:${value}"></span>`).join("")}</div><div class="status-legend">${groups.map(([label, value, type]) => `<span><i class="legend-dot distribution-${type}" aria-hidden="true"></i>${label}<strong>${value}</strong></span>`).join("")}</div>` : `<p class="muted">No Environments yet. Create a Lease to begin.</p>`}
+            <a class="row-action" href="#/environments">View all Environments →</a></section>
+          <section class="panel"><div class="panel-head"><div><h2>Needs attention</h2><p class="panel-subtitle">Blocked and unknown states from the Lease list.</p></div></div>
+            ${attention.length ? `<ul class="attention-list">${attention.slice(0, 4).map((env) => `<li><div><strong>${esc(env.name)}</strong><span>${esc(env.lease.name)}</span></div>${badge(env.availability)}<a class="row-action" href="#/lease/${encodeURIComponent(env.lease.lease_id)}">Open Lease</a></li>`).join("")}</ul>${attention.length > 4 ? `<p class="field-note">Showing 4 of ${attention.length}. Open Environments for the full list.</p>` : ""}` : `<div class="overview-clear"><span class="clear-icon">${icon("check", "")}</span><strong>No blocked or unknown Environments</strong><p>Other states may still need time to finish. Check each Environment for its observed result.</p></div>`}
+          </section>
+        </div>
+        <section class="panel overview-deployments"><div class="panel-head"><div><h2>Your deployments</h2><p class="panel-subtitle">Each deployment is a Lease. Attention first, then by expiry.</p></div><a class="row-action" href="#/leases">View all Leases →</a></div>
+          ${ordered.length ? `<div class="table-wrap environment-table"><table><thead><tr><th>Lease</th><th>Blueprint</th><th>Environments</th><th>Mode</th><th>Expires</th><th>Action</th></tr></thead><tbody>${ordered.slice(0, 6).map((lease) => `<tr><td data-label="Lease"><a class="table-name" href="#/lease/${encodeURIComponent(lease.lease_id)}">${esc(lease.name)}</a></td><td data-label="Blueprint">${esc(lease.blueprint_ref)}</td><td data-label="Environments"><div class="overview-environments">${(lease.environments || []).map((env) => `<span><strong>${esc(env.name)}</strong>${badge(env.availability)}</span>`).join("") || `<span class="muted">None</span>`}</div></td><td data-label="Mode">${esc(lease.mode || "Not set")}</td><td data-label="Expires">${fmt(lease.expires_at)}</td><td data-label="Action"><a class="row-action" href="#/lease/${encodeURIComponent(lease.lease_id)}">Open Lease →</a></td></tr>`).join("")}</tbody></table></div>${ordered.length > 6 ? `<p class="field-note">Showing 6 of ${ordered.length} Leases.</p>` : ""}` : `<div class="empty"><strong>No Leases yet</strong><p>Create a Lease to set up your first Environment.</p><a class="btn primary" href="#/new">Create Lease</a></div>`}
+        </section>`;
+    } catch (error) { document.getElementById("overview-content").innerHTML = ""; fail(error); }
+  }
+
   async function environmentsView() {
     view.innerHTML = `<div class="page-intro with-action"><div><p class="eyebrow">Operations workspace</p><h1 class="page-title">Environments</h1>
       <p class="page-summary">Find environments that need attention, check the last observation, and open details before changing state.</p></div><a class="btn primary" href="#/new">Create Lease</a></div>
       <div id="env-summary" class="summary-grid" aria-label="Environment summary"></div><p id="env-summary-note" class="summary-note" hidden></p>
       <div class="panel environment-panel"><div class="panel-head"><div><h2>Your Environments</h2><p class="panel-subtitle">Blocked and unknown states appear first.</p></div></div>
         <div id="env-filters" class="row env-filters" hidden><div><label for="env-search">Search Environment or Lease</label><div class="search-control">${icon("search", "search-icon")}<input id="env-search" name="search" type="search" autocomplete="off" placeholder="Search by name…"></div></div>
-          <div><label for="env-filter">Observed state</label><select id="env-filter" name="state"><option value="">All states</option><option value="BLOCKED">Blocked</option><option value="UNKNOWN">Unknown</option><option value="CHANGING">Changing</option><option value="AWAKE">Awake</option><option value="SLEEPING">Sleeping</option></select></div></div>
+          <div><label for="env-filter">Observed state</label><select id="env-filter" name="state"><option value="">All states</option><option value="ATTENTION">Needs attention</option><option value="BLOCKED">Blocked</option><option value="UNKNOWN">Unknown</option><option value="CHANGING">Changing</option><option value="AWAKE">Awake</option><option value="SLEEPING">Sleeping</option></select></div></div>
         <div id="env-list" role="status">Loading Environments…</div></div>`;
     const renderSummary = (rows, failures = 0) => {
       const count = (predicate) => rows.filter(predicate).length;
@@ -106,8 +149,8 @@
         const nextParams = new URLSearchParams();
         if (search) nextParams.set("search", search);
         if (state) nextParams.set("state", state);
-        history.replaceState(null, "", `${location.pathname}${location.search}#/${nextParams.size ? `?${nextParams}` : ""}`);
-        const filtered = rows.filter((e) => (!search || `${e.name} ${e.environment_id} ${e.lease.name}`.toLowerCase().includes(search)) && (!state || (state === "SLEEPING" ? e.availability === "SLEEPING" || String(e.availability || "").startsWith("ASLEEP") : e.availability === state)));
+        history.replaceState(null, "", `${location.pathname}${location.search}#/environments${nextParams.size ? `?${nextParams}` : ""}`);
+        const filtered = rows.filter((e) => (!search || `${e.name} ${e.environment_id} ${e.lease.name}`.toLowerCase().includes(search)) && (!state || (state === "ATTENTION" ? ["BLOCKED", "UNKNOWN"].includes(e.availability) : state === "SLEEPING" ? e.availability === "SLEEPING" || String(e.availability || "").startsWith("ASLEEP") : e.availability === state)));
         container.innerHTML = filtered.length ? `<p class="field-note">${filtered.length} of ${rows.length} Environments</p><div class="table-wrap environment-table"><table>
           <tr><th>Environment</th><th>Lease</th><th>Observed / desired</th><th>Operation</th><th>Last check</th><th>Action</th></tr>${filtered.map((e) => `<tr class="${e.availability === "BLOCKED" ? "attention-blocked" : e.active_operation_id ? "attention-changing" : ""}">
             <td data-label="Environment"><a class="table-name" href="#/environment/${encodeURIComponent(e.environment_id)}">${esc(e.name)}</a><br><code>${esc(e.environment_id)}</code></td>
@@ -359,7 +402,7 @@
       const blocked = Boolean(e.blocked || e.blocked_reason || e.availability === "BLOCKED");
       const terminal = e.status === "RECLAIMED";
       view.innerHTML = `
-        <div class="page-intro"><p class="eyebrow"><a href="#/">Environments</a> / <a href="#/lease/${encodeURIComponent(e.lease_id)}">Lease</a> / Environment</p>
+        <div class="page-intro"><p class="eyebrow"><a href="#/environments">Environments</a> / <a href="#/lease/${encodeURIComponent(e.lease_id)}">Lease</a> / Environment</p>
           <h1 class="page-title">${esc(e.name)}</h1><p class="page-summary">${esc(e.environment_id)} · Checked ${fmt(e.observed_at)}</p></div>
         ${blocked ? `<div class="alert" role="alert"><strong>Environment blocked</strong><p>${esc(e.blocked_reason && e.blocked_reason.code || "Investigation required")}: ${esc(e.blocked_reason && e.blocked_reason.detail || "Check the operation history and contact an administrator.")}</p></div>` : ""}
         <div class="panel"><div class="panel-head state-panel-head"><h2>Current state</h2><button id="refresh" type="button" aria-label="Refresh status">${icon("refresh")}<span class="refresh-label">Refresh status</span></button></div><p class="panel-subtitle">Management, observation, and requested state can differ while work is running.</p>
@@ -460,21 +503,26 @@
     document.getElementById("logout").hidden = !c;
     document.querySelector(".primary-nav").hidden = !c;
     if (!c) { document.title = "Sign in · InfraFlow"; return loginView(); }
-    const h = location.hash || "#/";
+    let h = location.hash || "#/";
+    if (h.startsWith("#/?")) {
+      h = `#/environments?${h.slice(3)}`;
+      history.replaceState(null, "", `${location.pathname}${location.search}${h}`);
+    }
     document.querySelectorAll(".primary-nav a").forEach((a) => {
-      const selected = h === a.getAttribute("href") || (h.startsWith("#/?") && a.getAttribute("href") === "#/") || (h.startsWith("#/lease/") && a.getAttribute("href") === "#/leases") || (h.startsWith("#/environment/") && a.getAttribute("href") === "#/");
+      const selected = h === a.getAttribute("href") || (h.startsWith("#/environments?") && a.getAttribute("href") === "#/environments") || (h.startsWith("#/lease/") && a.getAttribute("href") === "#/leases") || (h.startsWith("#/environment/") && a.getAttribute("href") === "#/environments");
       if (selected) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     });
     if (window.matchMedia("(max-width: 900px)").matches) document.querySelector('.primary-nav a[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
-    document.title = h.startsWith("#/lease/") ? "Lease · InfraFlow" : h.startsWith("#/environment/") ? "Environment · InfraFlow" : `${h === "#/new" ? "Create Lease" : h === "#/admin" ? "Admin" : h === "#/compose" ? "Blueprint check" : h === "#/leases" ? "Leases" : "Environments"} · InfraFlow`;
+    document.title = h.startsWith("#/lease/") ? "Lease · InfraFlow" : h.startsWith("#/environment/") ? "Environment · InfraFlow" : `${h === "#/new" ? "Create Lease" : h === "#/admin" ? "Admin" : h === "#/compose" ? "Blueprint check" : h === "#/leases" ? "Leases" : h.startsWith("#/environments") ? "Environments" : "Overview"} · InfraFlow`;
     let m;
     if (h === "#/new") return createView();
     if (h === "#/leases") return dashboard();
+    if (h === "#/environments" || h.startsWith("#/environments?")) return environmentsView();
     if (h === "#/compose") return composeView();
     if (h === "#/admin") return adminView();
     if ((m = h.match(/^#\/environment\/(.+)$/))) return environmentView(decodeURIComponent(m[1]));
     if ((m = h.match(/^#\/lease\/(.+)$/))) return leaseView(m[1]);
-    return environmentsView();
+    return overviewView();
   }
   document.getElementById("logout").onclick = () => { store.clear(); route(); };
   window.addEventListener("hashchange", route);

@@ -1,6 +1,6 @@
 # InfraFlow console v4 — enterprise cloud dashboard
 
-This revision implements the team's 2026-11-09 UI request for Sign in, Environments, Environment detail, and New Lease. The product and API baseline remains v1.2. The v3 visual document is historical.
+This revision implements the team's 2026-11-09 UI request for Sign in, Environments, Environment detail, and New Lease. The signed-in Overview is specified separately in `infraflow-overview-v1.md`. The product and API baseline remains v1.2. The v3 visual document is historical.
 
 ## Design system
 
