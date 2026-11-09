@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Environments · InfraFlow</title>
+</head>
+<body>
+  <div class="min-h-screen bg-[#F6F8FB] font-sans text-[#14243A]">
+    <header class="bg-[#10233E] text-white">
+      <div class="mx-auto flex h-[74px] max-w-[1240px] items-center justify-between gap-8 px-8">
+        <div class="flex items-center gap-10">
+          <a id="brand-home" href="#environments" class="flex items-center gap-3 text-[19px] font-bold tracking-tight text-white no-underline"><span class="grid h-9 w-9 place-items-center rounded-md bg-[#3F75E8] text-[19px] font-bold">I</span>InfraFlow</a>
+          <nav class="flex h-[74px] items-center gap-7 text-[14px] font-semibold" aria-label="Primary navigation">
+            <a id="nav-environments" href="#environments" class="flex h-full items-center border-b-[3px] border-[#76A0FF] pt-[3px] text-white no-underline">Environments</a>
+            <a id="nav-leases" href="#leases" class="text-[#B6C8E0] no-underline">Leases</a>
+            <a id="nav-create" href="#create" class="text-[#B6C8E0] no-underline">Create Lease</a>
+            <a id="nav-blueprint" href="#blueprint" class="text-[#B6C8E0] no-underline">Blueprint check</a>
+            <a id="nav-admin" href="#admin" class="text-[#B6C8E0] no-underline">Admin</a>
+          </nav>
+        </div>
+        <div class="flex items-center gap-4 text-[13px]"><span class="text-[#B6C8E0]">manager@example.test</span><button class="rounded-md border border-[#57708F] px-3 py-2 font-semibold text-white">Sign out</button></div>
+      </div>
+    </header>
+    <main class="mx-auto max-w-[1240px] px-8 pb-20 pt-12">
+      <div class="mb-8 flex items-end justify-between gap-8">
+        <div><p class="mb-2 text-[13px] font-semibold text-[#51647C]">Operations workspace</p><h1 class="text-[38px] font-bold leading-tight tracking-[-0.035em]">Environments</h1><p class="mt-3 max-w-[650px] text-[15px] leading-6 text-[#51647C]">Find environments that need attention. Check the last observation before changing state.</p></div>
+        <a id="create-lease-action" href="#create" class="inline-flex h-11 items-center rounded-md bg-[#2458D3] px-5 text-[14px] font-semibold text-white no-underline">Create Lease</a>
+      </div>
+      <section class="overflow-hidden rounded-lg border border-[#D8E1EC] bg-white" aria-labelledby="environment-heading">
+        <div class="flex items-center justify-between border-b border-[#D8E1EC] px-6 py-5"><div><h2 id="environment-heading" class="text-[20px] font-bold tracking-tight">Your Environments</h2><p class="mt-1 text-[13px] text-[#51647C]">Blocked and unknown states appear first.</p></div><p class="text-[13px] font-semibold text-[#51647C]">3 Environments</p></div>
+        <div class="flex items-end gap-4 border-b border-[#D8E1EC] bg-[#FBFCFE] px-6 py-4"><label class="block flex-1 text-[12px] font-semibold text-[#42566F]">Search Environment or Lease<input type="search" placeholder="Search by name…" class="mt-2 block h-11 w-full rounded-md border border-[#BCCADD] bg-white px-3 text-[14px] font-normal text-[#14243A]"></label><label class="block w-[220px] text-[12px] font-semibold text-[#42566F]">Observed state<select class="mt-2 block h-11 w-full rounded-md border border-[#BCCADD] bg-white px-3 text-[14px] font-normal text-[#14243A]"><option>All states</option></select></label></div>
+        <div class="grid grid-cols-[2fr_1.15fr_1.35fr_1.15fr_1fr] gap-4 border-b border-[#D8E1EC] bg-[#F7F9FC] px-6 py-3 text-[11px] font-bold uppercase tracking-[0.08em] text-[#51647C]"><span>Environment</span><span>Lease</span><span>Observed / desired</span><span>Operation</span><span>Last check</span></div>
+        <div class="grid grid-cols-[2fr_1.15fr_1.35fr_1.15fr_1fr] items-center gap-4 border-b border-[#D8E1EC] border-l-[4px] border-l-[#AA2828] px-6 py-5 text-[14px]"><div><a id="environment-dev" href="#environment-dev" class="font-bold text-[#2458D3] underline underline-offset-4">dev</a><p class="mt-1 font-mono text-[12px] text-[#51647C]">staging-dev</p></div><div><a id="lease-staging-a" href="#lease-staging" class="font-semibold text-[#2458D3] underline underline-offset-4">staging</a><p class="mt-1 text-[12px] text-[#51647C]">Expires Dec 1</p></div><div><span class="inline-flex rounded-full border border-[#D69393] bg-[#FFF2F1] px-2.5 py-1 text-[12px] font-bold text-[#AA2828]">BLOCKED</span><p class="mt-2 text-[12px] text-[#51647C]">Desired: SLEEPING</p></div><span class="text-[13px] text-[#51647C]">None running</span><span class="text-[13px] tabular-nums text-[#42566F]">Nov 8, 09:00</span></div>
+        <div class="grid grid-cols-[2fr_1.15fr_1.35fr_1.15fr_1fr] items-center gap-4 border-b border-[#D8E1EC] border-l-[4px] border-l-[#B98B3B] px-6 py-5 text-[14px]"><div><a id="environment-qa" href="#environment-qa" class="font-bold text-[#2458D3] underline underline-offset-4">qa</a><p class="mt-1 font-mono text-[12px] text-[#51647C]">staging-qa</p></div><div><a id="lease-staging-b" href="#lease-staging" class="font-semibold text-[#2458D3] underline underline-offset-4">staging</a><p class="mt-1 text-[12px] text-[#51647C]">Expires Dec 1</p></div><div><span class="inline-flex rounded-full border border-[#E7CF9B] bg-[#FFF5E4] px-2.5 py-1 text-[12px] font-bold text-[#8B510D]">CHANGING</span><p class="mt-2 text-[12px] text-[#51647C]">Desired: AWAKE</p></div><span class="font-mono text-[12px] text-[#42566F]">op_4a9b</span><span class="text-[13px] tabular-nums text-[#42566F]">Nov 8, 10:02</span></div>
+        <div class="grid grid-cols-[2fr_1.15fr_1.35fr_1.15fr_1fr] items-center gap-4 border-l-[4px] border-l-transparent px-6 py-5 text-[14px]"><div><a id="environment-demo" href="#environment-demo" class="font-bold text-[#2458D3] underline underline-offset-4">demo</a><p class="mt-1 font-mono text-[12px] text-[#51647C]">showcase-demo</p></div><div><a id="lease-showcase" href="#lease-showcase" class="font-semibold text-[#2458D3] underline underline-offset-4">showcase</a><p class="mt-1 text-[12px] text-[#51647C]">Expires Nov 27</p></div><div><span class="inline-flex rounded-full border border-[#90C2AC] bg-[#E7F5EE] px-2.5 py-1 text-[12px] font-bold text-[#126445]">AWAKE</span><p class="mt-2 text-[12px] text-[#51647C]">Desired: AWAKE</p></div><span class="text-[13px] text-[#51647C]">None running</span><span class="text-[13px] tabular-nums text-[#42566F]">Nov 8, 10:05</span></div>
+      </section>
+      <p class="mt-5 text-[12px] text-[#6B7D93]">Observation times come from the last resource check. Requested state is not proof of completion.</p>
+    </main>
+  </div>
+</body>
+</html>

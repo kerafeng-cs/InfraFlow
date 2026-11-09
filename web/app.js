@@ -32,16 +32,17 @@
       return c;
     } catch (e) { return null; }
   }
+  const isAdmin = (c) => String(c && c["cognito:groups"] || "").replace(/[\[\]]/g, " ").split(/[\s,]+/).includes("infraflow_admins");
 
   // ---------------- API ----------------
-  async function api(method, path, body) {
+  async function api(method, path, body, requestKey) {
     const headers = { authorization: store.get("idToken") || "" };
     if (method !== "GET") {
       headers["content-type"] = "application/json";
-      headers["idempotency-key"] = crypto.randomUUID();
+      headers["idempotency-key"] = requestKey || crypto.randomUUID();
     }
     const r = await fetch(cfg.apiUrl + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-    if (r.status === 401) { store.clear(); route(); throw new Error("Session expired"); }
+    if (r.status === 401) { store.clear(); setTimeout(route, 0); throw new Error("Session expired. Sign in again."); }
     const text = await r.text();
     const b = text ? JSON.parse(text) : null;
     if (!r.ok) throw new Error((b && b.error && `${b.error.code}: ${b.error.message}`) || r.statusText);
@@ -50,29 +51,217 @@
 
   // ---------------- helpers ----------------
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const fmt = (iso) => (iso ? new Date(iso).toLocaleString("en-GB") : "-");
-  const badge = (a) => {
+  const dateTime = new Intl.DateTimeFormat(navigator.language || "en", { dateStyle: "medium", timeStyle: "short" });
+  const number = new Intl.NumberFormat(navigator.language || "en", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmt = (iso) => (iso ? dateTime.format(new Date(iso)) : "-");
+  const badge = (a, context = "") => {
     const k = String(a || "").split(":")[0];
-    return `<span class="badge b-${esc(k)}">${esc(a || "-")}</span>`;
+    return `<span class="badge b-${esc(k)}${context ? ` b-${esc(context)}-${esc(k)}` : ""}">${esc(a || "-")}</span>`;
   };
+  const icon = (name, extraClass = "button-icon") => `<svg class="${extraClass}" aria-hidden="true"><use href="#icon-${name}"/></svg>`;
+  const brand = `<div class="login-brand"><span class="brand-mark">${icon("cube")}</span>InfraFlow</div>`;
   const CLASS = { network: "free", egress: "hourly_no_data", database: "data", app: "stoppable", entry: "hourly_no_data" };
   const insts = (m) => Object.entries(m || {}).map(([k, v]) => `<span class="inst c-${CLASS[k] || ""}">${esc(k)}: ${esc(v)}</span>`).join("");
   const toLocalInput = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-  function fail(e) { view.insertAdjacentHTML("afterbegin", `<div class="panel err">${esc(e.message || e)}</div>`); }
+  function fail(e) { view.insertAdjacentHTML("afterbegin", `<div class="alert" role="alert"><strong>Could not complete the request</strong><p>${esc(e.message || e)}</p></div>`); }
 
   // ---------------- views ----------------
+  async function overviewView() {
+    view.innerHTML = `<div class="page-intro with-action"><div><h1 class="page-title">Overview</h1>
+      <p class="page-summary">Your Leases and Environments at a glance. Open a Lease to review its resources and operations.</p></div>
+      <div class="overview-actions"><button id="overview-refresh" type="button">${icon("refresh")} Refresh</button><a class="btn primary" href="#/new">Create Lease</a></div></div>
+      <div id="overview-content"><p role="status">Loading overview…</p></div>`;
+    try {
+      const leases = (await api("GET", "/v1/leases")).items || [];
+      const environments = leases.flatMap((lease) => (lease.environments || []).map((env) => ({ ...env, lease })));
+      const asleep = (state) => state === "SLEEPING" || String(state || "").startsWith("ASLEEP");
+      const attention = environments.filter((env) => ["BLOCKED", "UNKNOWN"].includes(env.availability));
+      const groups = [
+        ["Awake", environments.filter((env) => env.availability === "AWAKE").length, "awake"],
+        ["Sleeping", environments.filter((env) => asleep(env.availability)).length, "sleeping"],
+        ["Changing", environments.filter((env) => env.availability === "CHANGING").length, "changing"],
+        ["Needs attention", attention.length, "attention"],
+      ];
+      const other = environments.length - groups.reduce((sum, group) => sum + group[1], 0);
+      if (other) groups.push(["Other states", other, "other"]);
+      const metrics = [
+        ["Total Leases", leases.length, "total", "list", "#/leases"],
+        ["Environments", environments.length, "total", "cube", "#/environments"],
+        ["Awake", groups[0][1], "awake", "check", "#/environments?state=AWAKE"],
+        ["Needs attention", attention.length, "attention", "settings", "#/environments?state=ATTENTION"],
+      ];
+      const ordered = [...leases].sort((a, b) => {
+        const count = (lease) => (lease.environments || []).filter((env) => ["BLOCKED", "UNKNOWN"].includes(env.availability)).length;
+        return count(b) - count(a) || new Date(a.expires_at) - new Date(b.expires_at);
+      });
+      const circumference = 2 * Math.PI * 76;
+      let arcOffset = 0;
+      const donutArcs = environments.length ? groups.filter(([, value]) => value).map(([, value, type]) => {
+        const length = value / environments.length * circumference;
+        const arc = `<circle class="donut-${type}" cx="110" cy="110" r="76" fill="none" stroke-width="22" stroke-dasharray="${length} ${circumference}" stroke-dashoffset="${-arcOffset}" transform="rotate(-90 110 110)"/>`;
+        arcOffset += length;
+        return arc;
+      }).join("") : "";
+      const now = Date.now();
+      const week = 7 * 864e5;
+      const expiry = [
+        ["Date passed", 0, "past"], ["Next 7 days", 0, "soon"], ["8–30 days", 0, "month"], ["Later", 0, "later"], ["Date unavailable", 0, "unknown"],
+      ];
+      for (const lease of leases) {
+        const due = Date.parse(lease.expires_at);
+        const index = !Number.isFinite(due) ? 4 : due < now ? 0 : due <= now + week ? 1 : due <= now + 30 * 864e5 ? 2 : 3;
+        expiry[index][1] += 1;
+      }
+      const expiryMax = Math.max(1, ...expiry.map(([, value]) => value));
+      const nextExpiry = leases.filter((lease) => Number.isFinite(Date.parse(lease.expires_at)) && Date.parse(lease.expires_at) >= now).sort((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at))[0];
+      document.getElementById("overview-content").innerHTML = `<section class="panel overview-priority" id="overview-priority" aria-live="polite"><h2>What needs attention</h2><p class="muted">Checking your deployments…</p></section>
+        <div class="overview-freshness" id="overview-freshness" role="status">Checking observation times…</div>
+        <div class="summary-grid" aria-label="Deployment summary">${metrics.map(([label, value, type, symbol, href]) => `<a class="summary-card overview-metric ${type}" href="${href}" aria-label="${label}: ${value}. View details"><span class="summary-icon">${icon(symbol, "")}</span><small>${label}</small><strong>${value}</strong></a>`).join("")}</div>
+        <section class="panel overview-active" id="overview-active" aria-live="polite"><h2>Operations in progress</h2><p class="muted">Checking active operations…</p></section>
+        <div class="overview-panels">
+          <section class="panel overview-status"><div class="panel-head"><div><h2>Environment status</h2><p class="panel-subtitle">Current availability from the Lease list. Requested state is not proof of completion.</p></div></div>
+            ${environments.length ? `<div class="overview-status-content"><svg class="overview-donut" viewBox="0 0 220 220" role="img" aria-label="${groups.map(([label, value]) => `${label}: ${value}`).join(", ")}"><circle class="donut-track" cx="110" cy="110" r="76" fill="none" stroke-width="22"/>${donutArcs}<text class="donut-total" x="110" y="106" text-anchor="middle">${environments.length}</text><text class="donut-caption" x="110" y="128" text-anchor="middle">Environments</text></svg><div class="status-legend">${groups.map(([label, value, type]) => `<span><i class="legend-dot distribution-${type}" aria-hidden="true"></i><span>${label}</span><strong>${value}</strong></span>`).join("")}</div></div>` : `<p class="muted">No Environments yet. Create a Lease to begin.</p>`}
+            <a class="row-action" href="#/environments">View all Environments →</a></section>
+          <section class="panel overview-expiry"><div class="panel-head"><div><h2>Lease expiry</h2><p class="panel-subtitle">Number of Leases by expiry date, relative to now.</p></div></div>
+            <div class="expiry-chart" role="group" aria-label="Lease expiry date distribution">${expiry.filter(([, value, type]) => value || type !== "unknown").map(([label, value, type]) => `<div class="expiry-row"><span>${label}</span><div class="expiry-track" role="img" aria-label="${label}: ${value} Lease${value === 1 ? "" : "s"}"><i class="expiry-${type}" style="width:${value / expiryMax * 100}%"></i></div><strong>${value}</strong></div>`).join("")}</div>
+            <p class="field-note">${nextExpiry ? `Next: <a href="#/lease/${encodeURIComponent(nextExpiry.lease_id)}">${esc(nextExpiry.name)}</a> · ${fmt(nextExpiry.expires_at)}` : "No upcoming Lease expiry date."}</p></section>
+        </div>
+        <div class="overview-insights"><section class="panel"><div class="panel-head"><div><h2>Recent operations</h2><p class="panel-subtitle">Latest recorded actions across your Environments.</p></div></div><div id="overview-operations" role="status">Loading operations…</div></section>
+          <section class="panel"><div class="panel-head"><div><h2>Estimated cost</h2><p class="panel-subtitle">Three scenarios for your Leases.</p></div></div><div id="overview-cost" role="status">Loading estimates…</div></section></div>
+        <section class="panel overview-deployments"><div class="panel-head"><div><h2>Your deployments</h2><p class="panel-subtitle">Each deployment is a Lease. Attention first, then by expiry.</p></div><a class="row-action" href="#/leases">View all Leases →</a></div>
+          ${ordered.length ? `<div class="table-wrap environment-table"><table><thead><tr><th>Lease</th><th>Blueprint</th><th>Environments</th><th>Mode</th><th>Expires</th><th>Action</th></tr></thead><tbody>${ordered.slice(0, 6).map((lease) => `<tr><td data-label="Lease"><a class="table-name" href="#/lease/${encodeURIComponent(lease.lease_id)}">${esc(lease.name)}</a></td><td data-label="Blueprint">${esc(lease.blueprint_ref)}</td><td data-label="Environments"><div class="overview-environments">${(lease.environments || []).map((env) => `<span><strong>${esc(env.name)}</strong>${badge(env.availability)}</span>`).join("") || `<span class="muted">None</span>`}</div></td><td data-label="Mode">${esc(lease.mode || "Not set")}</td><td data-label="Expires">${fmt(lease.expires_at)}</td><td data-label="Action"><a class="row-action" href="#/lease/${encodeURIComponent(lease.lease_id)}">Open Lease →</a></td></tr>`).join("")}</tbody></table></div>${ordered.length > 6 ? `<p class="field-note">Showing 6 of ${ordered.length} Leases.</p>` : ""}` : `<div class="empty"><strong>No Leases yet</strong><p>Create a Lease to set up your first Environment.</p><a class="btn primary" href="#/new">Create Lease</a></div>`}
+        </section>`;
+      const details = await Promise.allSettled(leases.map((lease) => api("GET", `/v1/leases/${encodeURIComponent(lease.lease_id)}`)));
+      if (!document.getElementById("overview-operations")) return;
+      const loaded = details.filter((result) => result.status === "fulfilled").map((result) => result.value);
+      const envRows = loaded.flatMap((lease) => (lease.environments || []).map((env) => ({ ...env, lease })));
+      const operationResults = await Promise.allSettled(envRows.map((env) => api("GET", `/v1/environments/${encodeURIComponent(env.environment_id)}/operations`)));
+      if (!document.getElementById("overview-operations")) return;
+      const operations = operationResults.flatMap((result, index) => result.status === "fulfilled" ? (result.value.items || []).map((op) => ({ ...op, env: envRows[index] })) : []);
+      operations.sort((a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at));
+      const missingOps = details.length - loaded.length + operationResults.filter((result) => result.status === "rejected").length;
+      const checkedAt = Date.now();
+      const monitored = envRows.filter((env) => env.status !== "RECLAIMED");
+      const stale = monitored.filter((env) => !Number.isFinite(Date.parse(env.observed_at)) || checkedAt - Date.parse(env.observed_at) > 15 * 60000);
+      const unavailable = details.length - loaded.length;
+      document.getElementById("overview-freshness").textContent = `${monitored.length - stale.length} of ${monitored.length} active Environments checked within 15 minutes${unavailable ? `; ${unavailable} Lease${unavailable === 1 ? "" : "s"} could not be loaded` : ""}. Last page update: ${dateTime.format(new Date(checkedAt))}.`;
+      const active = envRows.map((env) => ({ env, op: operations.find((op) => op.operation_id === env.active_operation_id) })).filter(({ env }) => env.active_operation_id);
+      const minutesRunning = (op) => op && Number.isFinite(Date.parse(op.started_at || op.requested_at)) ? Math.max(0, Math.floor((checkedAt - Date.parse(op.started_at || op.requested_at)) / 60000)) : null;
+      document.getElementById("overview-active").innerHTML = `<div class="panel-head"><div><h2>Operations in progress</h2><p class="panel-subtitle">Requests can take time; completion is confirmed by the observed state.</p></div><strong class="overview-count">${active.length}</strong></div>${active.length ? `<ul class="overview-operation-list">${active.slice(0, 5).map(({ env, op }) => `<li><div><a class="table-name" href="#/environment/${encodeURIComponent(env.environment_id)}">${esc(env.lease.name)} / ${esc(env.name)}</a><span>${esc(op && op.action || "Operation")} · ${minutesRunning(op) === null ? "Elapsed time unavailable" : `${minutesRunning(op)} min elapsed`}</span></div>${badge(op && op.status || "CHANGING", "operation")}</li>`).join("")}</ul>${active.length > 5 ? `<a class="row-action" href="#/environments?state=CHANGING">View all changing Environments</a>` : ""}` : `<p class="muted">No operations are running.</p>`}`;
+      const urgent = [];
+      for (const env of envRows.filter((env) => ["BLOCKED", "UNKNOWN"].includes(env.availability))) urgent.push({ severity: 0, text: `${env.lease.name} / ${env.name}`, detail: env.blocked_reason && env.blocked_reason.code || env.availability, href: `#/environment/${encodeURIComponent(env.environment_id)}` });
+      for (const env of envRows) {
+        const latest = operations.find((op) => op.env.environment_id === env.environment_id);
+        if (latest && ["FAILED", "BLOCKED", "TIMED_OUT"].includes(latest.status) && !["BLOCKED", "UNKNOWN"].includes(env.availability)) urgent.push({ severity: 1, text: `${env.lease.name} / ${env.name}`, detail: `${latest.action || "Operation"} ${latest.status}`, href: `#/environment/${encodeURIComponent(env.environment_id)}` });
+      }
+      for (const { env, op } of active) {
+        const limit = { WAKE: 45, RECLAIM: 75, PROVISION: 30, SLEEP: 30 }[op && op.action] || 45;
+        if (minutesRunning(op) !== null && minutesRunning(op) > limit) urgent.push({ severity: 1, text: `${env.lease.name} / ${env.name}`, detail: `Operation running ${minutesRunning(op)} min; review its progress`, href: `#/environment/${encodeURIComponent(env.environment_id)}` });
+      }
+      for (const lease of loaded.filter((lease) => !lease.reclaim_requested && !(lease.environments || []).every((env) => env.status === "RECLAIMED") && Number.isFinite(Date.parse(lease.expires_at)) && Date.parse(lease.expires_at) <= checkedAt + 7 * 864e5)) urgent.push({ severity: 2, text: lease.name, detail: Date.parse(lease.expires_at) < checkedAt ? "Lease expiry passed" : `Lease expires ${fmt(lease.expires_at)}`, href: `#/lease/${encodeURIComponent(lease.lease_id)}` });
+      for (const env of stale.filter((env) => !env.active_operation_id && !["BLOCKED", "UNKNOWN", "RECLAIMED"].includes(env.availability))) urgent.push({ severity: 3, text: `${env.lease.name} / ${env.name}`, detail: env.observed_at ? `Last checked ${fmt(env.observed_at)}` : "Not checked yet", href: `#/environment/${encodeURIComponent(env.environment_id)}` });
+      urgent.sort((a, b) => a.severity - b.severity);
+      document.getElementById("overview-priority").innerHTML = `<div class="panel-head"><div><h2>What needs attention</h2><p class="panel-subtitle">Blocked states, failed actions, expiring Leases and old observations.</p></div><strong class="overview-count ${urgent.length ? "has-issues" : ""}">${urgent.length}</strong></div>${missingOps || unavailable ? `<p class="summary-note">Some data could not be loaded. Refresh before relying on this list.</p>` : ""}${urgent.length ? `<ul class="overview-priority-list">${urgent.slice(0, 6).map((item) => `<li><span class="priority-marker priority-${item.severity}" aria-hidden="true"></span><div><strong>${esc(item.text)}</strong><span>${esc(item.detail)}</span></div><a class="row-action" href="${item.href}">Review</a></li>`).join("")}</ul>${urgent.length > 6 ? `<p class="field-note">Showing 6 of ${urgent.length} items. Open Environments and Leases for the rest.</p>` : ""}` : `<p class="overview-all-clear">${missingOps || unavailable ? "No issues found in the loaded records; the full picture is unavailable." : "No issues found in the loaded records. Check observation times above before acting."}</p>`}`;
+      document.getElementById("overview-operations").innerHTML = `${missingOps ? `<p class="summary-note">History is incomplete: ${missingOps} source${missingOps === 1 ? "" : "s"} could not be loaded.</p>` : ""}${operations.length ? `<ul class="overview-operation-list">${operations.slice(0, 5).map((op) => `<li><div><a class="table-name" href="#/environment/${encodeURIComponent(op.env.environment_id)}">${esc(op.env.name)}</a><span>${esc(op.action || "Operation")} · ${fmt(op.requested_at)}</span></div>${badge(op.status, "operation")}</li>`).join("")}</ul><p class="field-note">Showing recent records, up to 20 per Environment. This is not a complete activity trend.</p>` : `<p class="muted">No recorded operations to show.</p>`}`;
+      const costLeases = loaded.filter((lease) => !lease.reclaim_requested && !(lease.environments || []).every((env) => env.status === "RECLAIMED"));
+      const costResults = await Promise.allSettled(costLeases.map((lease) => api("GET", `/v1/leases/${encodeURIComponent(lease.lease_id)}/cost`)));
+      if (!document.getElementById("overview-cost")) return;
+      const costs = costResults.filter((result) => result.status === "fulfilled").map((result) => result.value);
+      const missingCosts = costResults.length - costs.length + unavailable;
+      const totals = ["always_on", "stop_only", "infraflow"].map((key) => costs.reduce((sum, item) => sum + Number((item.totals || {})[key] || 0), 0));
+      const maxCost = Math.max(1, ...totals);
+      const labels = ["Always on", "Stop only", "InfraFlow"];
+      document.getElementById("overview-cost").innerHTML = `${missingCosts ? `<p class="summary-note">${missingCosts} Lease estimate${missingCosts === 1 ? "" : "s"} unavailable; totals below are partial.</p>` : ""}${costs.length ? `<div class="overview-cost-bars" role="group" aria-label="Estimated cost comparison in US dollars">${totals.map((value, index) => `<div class="overview-cost-row"><span>${labels[index]}</span><div class="expiry-track" role="img" aria-label="${labels[index]}: ${number.format(value)} US dollars"><i class="cost-bar-${index}" style="width:${value / maxCost * 100}%"></i></div><strong>$${number.format(value)}</strong></div>`).join("")}</div><p class="field-note">Active Leases only. USD estimates since each Lease began; periods differ. These are not AWS billed charges.</p>` : `<p class="muted">No active Lease estimates to show.</p>`}`;
+      document.getElementById("overview-refresh").onclick = overviewView;
+      clearInterval(pollTimer);
+      pollTimer = setInterval(() => { if (document.visibilityState === "visible" && !view.contains(document.activeElement) && (!location.hash || location.hash === "#/")) overviewView(); }, 60000);
+    } catch (error) { document.getElementById("overview-content").innerHTML = ""; fail(error); }
+  }
+
+  async function environmentsView() {
+    view.innerHTML = `<div class="page-intro with-action"><div><p class="eyebrow">Operations workspace</p><h1 class="page-title">Environments</h1>
+      <p class="page-summary">Find environments that need attention, check the last observation, and open details before changing state.</p></div><a class="btn primary" href="#/new">Create Lease</a></div>
+      <div id="env-summary" class="summary-grid" aria-label="Environment summary"></div><p id="env-summary-note" class="summary-note" hidden></p>
+      <div class="panel environment-panel"><div class="panel-head"><div><h2>Your Environments</h2><p class="panel-subtitle">Blocked and unknown states appear first.</p></div></div>
+        <div id="env-filters" class="row env-filters" hidden><div><label for="env-search">Search Environment or Lease</label><div class="search-control">${icon("search", "search-icon")}<input id="env-search" name="search" type="search" autocomplete="off" placeholder="Search by name…"></div></div>
+          <div><label for="env-filter">Observed state</label><select id="env-filter" name="state"><option value="">All states</option><option value="ATTENTION">Needs attention</option><option value="BLOCKED">Blocked</option><option value="UNKNOWN">Unknown</option><option value="CHANGING">Changing</option><option value="AWAKE">Awake</option><option value="SLEEPING">Sleeping</option></select></div></div>
+        <div id="env-list" role="status">Loading Environments…</div></div>`;
+    const renderSummary = (rows, failures = 0) => {
+      const count = (predicate) => rows.filter(predicate).length;
+      const cards = [
+        ["Total Environments", rows.length, "total", "grid"],
+        ["Awake", count((e) => e.availability === "AWAKE"), "awake", "check"],
+        ["Sleeping", count((e) => e.availability === "SLEEPING" || String(e.availability || "").startsWith("ASLEEP")), "sleeping", "cube"],
+        ["Needs Attention / Blocked", count((e) => ["BLOCKED", "UNKNOWN"].includes(e.availability)), "attention", "settings"],
+      ];
+      document.getElementById("env-summary").innerHTML = cards.map(([label, value, type, symbol]) => `<div class="summary-card ${type}"><span class="summary-icon">${icon(symbol, "")}</span><small>${label}</small><strong>${value}</strong></div>`).join("");
+      if (failures) { const note = document.getElementById("env-summary-note"); note.hidden = false; note.textContent = `Counts include loaded Environments only. ${failures} Lease${failures === 1 ? "" : "s"} could not be loaded.`; }
+    };
+    try {
+      const leases = (await api("GET", "/v1/leases")).items || [];
+      if (!leases.length) { renderSummary([]); document.getElementById("env-list").innerHTML = `<div class="empty"><strong>No Environments yet</strong><p>Create a Lease to set up your first Environment.</p><a class="btn primary" href="#/new">Create Lease</a></div>`; return; }
+      const results = await Promise.allSettled(leases.map((lease) => api("GET", `/v1/leases/${encodeURIComponent(lease.lease_id)}`)));
+      const rows = results.flatMap((result) => result.status === "fulfilled" ? result.value.environments.map((env) => ({ ...env, lease: result.value })) : []);
+      const failures = results.filter((result) => result.status === "rejected").length;
+      renderSummary(rows, failures);
+      const priority = (e) => e.availability === "BLOCKED" ? 0 : e.availability === "UNKNOWN" || !e.observed_at ? 1 : e.active_operation_id ? 2 : 3;
+      rows.sort((a, b) => priority(a) - priority(b) || new Date(a.lease.expires_at) - new Date(b.lease.expires_at) || a.name.localeCompare(b.name));
+      const container = document.getElementById("env-list");
+      if (failures) container.insertAdjacentHTML("beforebegin", `<div class="alert" role="alert">Could not load ${failures} Lease${failures === 1 ? "" : "s"}. Refresh the page to see the full list.</div>`);
+      if (!rows.length) { container.innerHTML = `<p class="muted">No Environments could be loaded. Refresh the page or open a Lease directly.</p>`; return; }
+      document.getElementById("env-filters").hidden = false;
+      const params = new URLSearchParams((location.hash.split("?")[1] || ""));
+      document.getElementById("env-search").value = params.get("search") || "";
+      if ([...document.getElementById("env-filter").options].some((option) => option.value === params.get("state"))) document.getElementById("env-filter").value = params.get("state") || "";
+      const render = () => {
+        const search = document.getElementById("env-search").value.trim().toLowerCase();
+        const state = document.getElementById("env-filter").value;
+        const nextParams = new URLSearchParams();
+        if (search) nextParams.set("search", search);
+        if (state) nextParams.set("state", state);
+        history.replaceState(null, "", `${location.pathname}${location.search}#/environments${nextParams.size ? `?${nextParams}` : ""}`);
+        const filtered = rows.filter((e) => (!search || `${e.name} ${e.environment_id} ${e.lease.name}`.toLowerCase().includes(search)) && (!state || (state === "ATTENTION" ? ["BLOCKED", "UNKNOWN"].includes(e.availability) : state === "SLEEPING" ? e.availability === "SLEEPING" || String(e.availability || "").startsWith("ASLEEP") : e.availability === state)));
+        container.innerHTML = filtered.length ? `<p class="field-note">${filtered.length} of ${rows.length} Environments</p><div class="table-wrap environment-table"><table>
+          <tr><th>Environment</th><th>Lease</th><th>Observed / desired</th><th>Operation</th><th>Last check</th><th>Action</th></tr>${filtered.map((e) => `<tr class="${e.availability === "BLOCKED" ? "attention-blocked" : e.active_operation_id ? "attention-changing" : ""}">
+            <td data-label="Environment"><a class="table-name" href="#/environment/${encodeURIComponent(e.environment_id)}">${esc(e.name)}</a><br><code>${esc(e.environment_id)}</code></td>
+            <td data-label="Lease"><a class="table-name" href="#/lease/${encodeURIComponent(e.lease.lease_id)}">${esc(e.lease.name)}</a><br><span class="field-note">Expires ${fmt(e.lease.expires_at)}</span></td>
+            <td data-label="Observed / desired">${badge(e.availability)}<br><span class="field-note">Desired: ${esc(e.desired || "Not set")}</span></td>
+            <td data-label="Operation">${e.active_operation_id ? `<code>${esc(e.active_operation_id)}</code>` : `<span class="muted">None running</span>`}</td>
+            <td data-label="Last check">${fmt(e.observed_at)}</td><td data-label="Action"><a class="row-action" href="#/environment/${encodeURIComponent(e.environment_id)}">View details →</a></td></tr>`).join("")}</table></div><p class="field-note">Observation time comes from the last resource check. Desired state is not proof of completion.</p>` : `<div class="empty"><strong>No matching Environments</strong><p>Try a different name or state.</p></div>`;
+      };
+      document.getElementById("env-search").oninput = render;
+      document.getElementById("env-filter").onchange = render;
+      render();
+    } catch (error) { document.getElementById("env-list").innerHTML = ""; fail(error); }
+  }
+
   function loginView() {
-    view.innerHTML = `
-      <div class="panel" style="max-width:380px;margin:8vh auto">
-        <h2>Sign in</h2>
-        <label>Email</label><input id="u" type="email" style="width:100%">
-        <label>Password</label><input id="p" type="password" style="width:100%">
-        <div id="np" hidden><label>New password (first sign-in)</label><input id="p2" type="password" style="width:100%"></div>
-        <p class="row"><button class="primary" id="go">Sign in</button></p>
-        <p id="msg" class="err"></p>
+    if (!cfg.apiUrl || !cfg.region || !cfg.clientId) {
+      document.title = "Connection unavailable · InfraFlow";
+      view.innerHTML = `${brand}<div class="panel login-panel" role="status">
+        <h1 class="page-title">Console unavailable</h1>
+        <p class="muted">This preview is not connected to an InfraFlow environment. Open the deployed console URL to sign in.</p>
+      </div>`;
+      return;
+    }
+    view.innerHTML = `${brand}
+      <div class="panel login-panel">
+        <h1 class="page-title">Sign in</h1>
+        <p class="muted">Manage your staging environments and review each operation.</p>
+        <form id="login-form">
+        <label for="u">Email</label><input id="u" name="username" type="email" autocomplete="username" required spellcheck="false">
+        <label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password" required>
+        <div id="np" hidden><label for="p2">New password (first sign-in)</label><input id="p2" name="new-password" type="password" autocomplete="new-password"></div>
+        <p class="row"><button class="primary" id="go" type="submit">Sign in</button></p>
+        </form>
+        <p id="msg" class="err" role="alert"></p>
       </div>`;
     let session = null;
-    document.getElementById("go").onclick = async () => {
+    document.getElementById("login-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const submit = document.getElementById("go");
+      submit.disabled = true;
+      submit.textContent = "Signing in…";
       const u = document.getElementById("u").value.trim();
       const p = document.getElementById("p").value;
       try {
@@ -85,73 +274,130 @@
         }
         if (r.ChallengeName === "NEW_PASSWORD_REQUIRED") {
           session = r.Session; document.getElementById("np").hidden = false;
+          document.getElementById("p2").required = true;
+          document.getElementById("p2").focus();
           document.getElementById("msg").textContent = "Set a new password to continue.";
           return;
         }
         store.set("idToken", r.AuthenticationResult.IdToken);
         location.hash = "#/"; route();
       } catch (e) { document.getElementById("msg").textContent = e.message; }
+      finally { submit.disabled = false; submit.textContent = session ? "Set new password" : "Sign in"; }
     };
   }
 
   async function dashboard() {
-    view.innerHTML = `<div class="panel"><div class="row"><h2 style="margin:0">Leases</h2><span class="sp" style="flex:1"></span>
-      <a class="btn" href="#/new">New Lease</a></div><div id="list" class="muted">Loading...</div></div>`;
+    view.innerHTML = `<div class="page-intro"><p class="eyebrow">Operations workspace</p><h1 class="page-title">Leases</h1>
+      <p class="page-summary">Find an environment, check its observed state, and follow work in progress.</p></div>
+      <div class="panel"><div class="panel-head"><div><h2>Your Leases</h2><p class="panel-subtitle">Each Lease can contain multiple environments.</p></div>
+      <a class="btn primary" href="#/new">Create Lease</a></div><div id="list" class="muted" role="status">Loading leases…</div></div>`;
     try {
       const r = await api("GET", "/v1/leases");
       document.getElementById("list").innerHTML = r.items.length === 0
-        ? `<p class="muted">No Leases yet.</p>`
-        : `<table><tr><th>Name</th><th>Blueprint</th><th>Environments</th><th>Mode</th><th>Expires</th></tr>${r.items.map((l) => `
-          <tr><td><a href="#/lease/${esc(l.lease_id)}">${esc(l.name)}</a></td><td>${esc(l.blueprint_ref)}</td>
+        ? `<div class="empty"><strong>No Leases yet</strong><p>Create a Lease to set up your first environment.</p><a class="btn primary" href="#/new">Create Lease</a></div>`
+        : `<div class="table-wrap"><table><tr><th>Name</th><th>Blueprint</th><th>Environments</th><th>Mode</th><th>Expires</th></tr>${r.items.map((l) => `
+          <tr><td><a class="table-name" href="#/lease/${esc(l.lease_id)}">${esc(l.name)}</a></td><td>${esc(l.blueprint_ref)}</td>
           <td>${l.environments.map((e) => `${esc(e.name)} ${badge(e.availability)}`).join("<br>")}</td>
-          <td>${esc(l.mode)}</td><td>${fmt(l.expires_at)}</td></tr>`).join("")}</table>`;
+          <td>${esc(l.mode)}</td><td>${fmt(l.expires_at)}</td></tr>`).join("")}</table></div>`;
     } catch (e) { fail(e); }
   }
 
   async function createView() {
     const now = new Date(); const later = new Date(now.getTime() + 30 * 864e5);
-    view.innerHTML = `<div class="panel"><h2>New Lease</h2>
-      <div class="grid">
-        <div><label>Lease name (lowercase letters and digits)</label><input id="name" placeholder="acme"></div>
-        <div><label>Blueprint</label><select id="bp"></select></div>
-        <div><label>Size</label><select id="size"><option>small</option><option>medium</option></select></div>
-        <div><label>Environments (comma-separated)</label><input id="envs" value="dev,qa"></div>
-        <div><label>Starts</label><input id="start" type="datetime-local" value="${toLocalInput(now)}"></div>
-        <div><label>Expires</label><input id="end" type="datetime-local" value="${toLocalInput(later)}"></div>
+    view.innerHTML = `<div class="page-intro"><p class="eyebrow">Create</p><h1 class="page-title">New Lease</h1>
+      <p class="page-summary">Define the environments, lifetime, and data policy before provisioning begins.</p></div><div class="panel create-panel"><h2>Lease details</h2><form id="create-form">
+      <section class="form-section"><h3>General &amp; Blueprint</h3><div class="form-grid">
+        <div class="span-full"><label for="name">Lease name (2–16 lowercase letters or digits)</label><input id="name" placeholder="acme" required pattern="[a-z][a-z0-9]{1,15}" autocomplete="off"></div>
+        <div><label for="bp">Blueprint</label><select id="bp"></select></div>
+        <div><label for="size">Size</label><select id="size"><option>small</option><option>medium</option></select></div>
+        <div class="span-full"><label for="envs">Environments (1–5 distinct names, up to 8 letters or digits each)</label><input id="envs" value="dev,qa" required autocomplete="off" aria-describedby="msg"></div>
+      </div></section>
+      <section class="form-section"><h3>Lifecycle Window</h3><div class="form-grid lifecycle-grid">
+        <div><label for="start">Starts</label><input id="start" type="datetime-local" value="${toLocalInput(now)}" required></div>
+        <div><label for="end">Expires</label><input id="end" type="datetime-local" value="${toLocalInput(later)}" required aria-describedby="msg"></div>
+      </div></section>
+      <section class="form-section"><h3>Application Workload</h3><p class="panel-subtitle">Docker image, linux/amd64</p><div class="form-grid">
+        <div class="span-full"><label for="image">Image</label><input id="image" value="ghcr.io/kerafeng-cs/infraflow-demo-app:1"></div>
+        <div><label for="port">Port</label><input id="port" type="number" min="1" max="65535" value="8080" required></div>
+        <div><label for="health">Health path</label><input id="health" value="/healthz" required pattern="/.*"></div>
+      </div></section>
+      <section class="form-section"><h3>Activity policy</h3><div class="form-grid">
+        <div><label for="mode">Mode</label><select id="mode"><option value="schedule">Schedule</option><option value="on_demand">On demand</option></select></div>
+        <div><label for="idle" id="idle-label">Sleep when idle after (minutes; optional)</label><input id="idle" type="number" min="1" placeholder="For example, 90…" aria-describedby="msg"></div>
       </div>
-      <h3>Application (Docker image, linux/amd64)</h3>
-      <div class="grid">
-        <div><label>Image</label><input id="image" value="ghcr.io/kerafeng-cs/infraflow-demo-app:1" style="width:100%"></div>
-        <div><label>Port</label><input id="port" type="number" value="8080"></div>
-        <div><label>Health path</label><input id="health" value="/healthz"></div>
-      </div>
-      <h3>Activity policy</h3>
-      <div class="grid">
-        <div><label>Mode</label><select id="mode"><option value="schedule">Schedule</option><option value="on_demand">On demand</option></select></div>
-        <div><label>Awake hours (UTC+7)</label><input id="from" value="08:00" size="5"> to <input id="to" value="19:00" size="5"></div>
-        <div><label>Days (1 = Monday to 7 = Sunday)</label><input id="days" value="1,2,3,4,5"></div>
-        <div><label>Sleep when idle after (minutes, empty = off)</label><input id="idle" type="number" placeholder="for example 90"></div>
-      </div>
-      <h3>Data at expiry</h3>
-      <label><input type="checkbox" id="keep" checked> Keep a final backup (database snapshot)</label>
-      <p class="row"><button class="primary" id="create">Create</button><span id="msg" class="err"></span></p></div>`;
+      <div id="schedule-fields" class="activity-schedule"><div class="form-grid">
+        <div><label for="from">Awake from (UTC+7)</label><input id="from" type="time" value="08:00"></div>
+        <div><label for="to">Awake until (UTC+7)</label><input id="to" type="time" value="19:00" aria-describedby="msg"></div>
+        <div class="span-full"><span id="days-label" class="field-label">Awake days (1 = Monday to 7 = Sunday)</span><input id="days" type="hidden" value="1,2,3,4,5"><div id="day-pills" class="day-selector" role="group" aria-labelledby="days-label" aria-describedby="msg" tabindex="-1">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day, index) => `<button type="button" data-day="${index + 1}" aria-label="${["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][index]}" aria-pressed="${index < 5}">${day}</button>`).join("")}</div></div>
+      </div></div></section>
+      <section class="form-section"><h3>Data at expiry</h3><label class="check-line"><input type="checkbox" id="keep" checked> Keep a final backup (database snapshot)</label></section>
+      <div id="create-review" class="review-box" hidden></div>
+      <button class="primary create-submit" id="create" type="submit">Review Lease</button><p id="msg" class="err" role="alert" tabindex="-1"></p></form></div>`;
     try {
       const c = await api("GET", "/v1/catalog/blueprints");
       document.getElementById("bp").innerHTML = c.items.map((b) => `<option value="${esc(b.ref)}">${esc(b.ref)}</option>`).join("");
-    } catch (e) { fail(e); }
-    document.getElementById("create").onclick = async () => {
+      if (!c.items.length) { document.getElementById("create").disabled = true; document.getElementById("msg").textContent = "No certified blueprints are available. Ask an administrator to check the catalog."; }
+    } catch (e) { document.getElementById("create").disabled = true; fail(e); }
+    view.querySelectorAll("#create-form input, #create-form select").forEach((control) => { if (!control.name) control.name = control.id; });
+    const form = document.getElementById("create-form");
+    const syncMode = () => {
+      const onDemand = document.getElementById("mode").value === "on_demand";
+      document.getElementById("schedule-fields").hidden = onDemand;
+      document.getElementById("idle").required = onDemand;
+      document.getElementById("idle-label").textContent = `Sleep when idle after (minutes; ${onDemand ? "required" : "optional"})`;
+    };
+    document.getElementById("mode").addEventListener("change", syncMode);
+    syncMode();
+    document.querySelectorAll("#day-pills button").forEach((button) => { button.onclick = () => {
+      button.setAttribute("aria-pressed", String(button.getAttribute("aria-pressed") !== "true"));
+      const days = [...document.querySelectorAll("#day-pills button[aria-pressed='true']")].map((selected) => selected.dataset.day);
+      const field = document.getElementById("days"); field.value = days.join(","); field.dispatchEvent(new Event("input", { bubbles: true }));
+    }; });
+    let reviewed = false; let createKey = null;
+    form.addEventListener("input", () => { reviewed = false; createKey = null; document.getElementById("create-review").hidden = true; document.getElementById("create").textContent = "Review Lease"; document.getElementById("msg").textContent = ""; });
+    document.getElementById("create-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const submit = document.getElementById("create");
       const v = (id) => document.getElementById(id).value;
-      const idle = parseInt(v("idle"), 10);
-      const policy = { mode: v("mode"), utc_offset_minutes: 420,
-        schedule: { days: v("days").split(",").map((x) => parseInt(x, 10)).filter(Boolean), start: v("from"), end: v("to") } };
+      let invalidField = null;
+      try {
+      const names = v("envs").split(",").map((x) => x.trim());
+      if (names.length > 5 || names.some((x) => !/^[a-z][a-z0-9]{0,7}$/.test(x)) || new Set(names).size !== names.length) { invalidField = "envs"; throw new Error("Enter 1–5 different environment names, each up to 8 lowercase letters or digits."); }
+      const start = new Date(v("start")); const end = new Date(v("end"));
+      if (start >= end || end - start > 120 * 864e5) { invalidField = "end"; throw new Error("Expiry must be after the start and within 120 days."); }
+      const idle = v("idle") ? parseInt(v("idle"), 10) : null;
+      if (v("mode") === "on_demand" && !idle) { invalidField = "idle"; throw new Error("On demand mode requires an idle sleep time in minutes."); }
+      const policy = { mode: v("mode"), utc_offset_minutes: 420 };
+      if (policy.mode === "schedule") {
+        const days = v("days").split(",").map((x) => x.trim());
+        if (days.length > 7 || days.some((x) => !/^[1-7]$/.test(x)) || new Set(days).size !== days.length) { invalidField = "day-pills"; throw new Error("Select at least one awake day."); }
+        if (v("from") >= v("to")) { invalidField = "to"; throw new Error("The scheduled awake end time must be after the start time."); }
+        policy.schedule = { days: days.map(Number), start: v("from"), end: v("to") };
+      }
       if (idle) policy.idle_timeout_minutes = idle;
       const body = { name: v("name").trim(), blueprint_ref: v("bp"), parameters: { size: v("size") },
-        environments: v("envs").split(",").map((x) => x.trim()).filter(Boolean),
-        starts_at: new Date(v("start")).toISOString(), expires_at: new Date(v("end")).toISOString(),
+        environments: names,
+        starts_at: start.toISOString(), expires_at: end.toISOString(),
         app: { image: v("image").trim(), port: parseInt(v("port"), 10), health_path: v("health") },
         activity_policy: policy, data_policy: { keep_final_backup: document.getElementById("keep").checked } };
-      try { const r = await api("POST", "/v1/leases", body); location.hash = `#/lease/${r.lease_id}`; }
-      catch (e) { document.getElementById("msg").textContent = e.message; }
+      document.getElementById("msg").textContent = "";
+      if (!reviewed) {
+        const review = document.getElementById("create-review");
+        const receipt = [
+          ["Lease", body.name], ["Blueprint", body.blueprint_ref], ["Size", body.parameters.size], ["Environments", names.join(", ")],
+          ["Starts", fmt(body.starts_at)], ["Expires", fmt(body.expires_at)], ["Mode", policy.mode === "schedule" ? "Schedule" : "On demand"],
+          ...(policy.mode === "schedule" ? [["Awake window", `${policy.schedule.start}–${policy.schedule.end} (UTC+7)`], ["Awake days", policy.schedule.days.map((day) => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][day - 1]).join(", ")]] : []),
+          ["Idle sleep", policy.idle_timeout_minutes ? `${policy.idle_timeout_minutes} minutes` : "Off"], ["Final backup", body.data_policy.keep_final_backup ? "Keep" : "Do not keep"],
+          ["Image", body.app.image, true], ["Port", body.app.port, true], ["Health path", body.app.health_path, true],
+        ];
+        review.innerHTML = `<h3 tabindex="-1">Review Before Creating</h3><dl class="review-grid">${receipt.map(([label, value, code]) => `<div><dt>${esc(label)}</dt><dd>${code ? `<code>${esc(value)}</code>` : esc(value)}</dd></div>`).join("")}</dl><p class="muted">Submitting creates the Lease and starts provisioning operations. Check their outcomes on each Environment.</p>`;
+        review.hidden = false; reviewed = true; createKey = crypto.randomUUID(); submit.textContent = "Create Lease and Start Provisioning"; review.scrollIntoView({ block: "nearest" }); review.querySelector("h3").focus({ preventScroll: true }); return;
+      }
+      submit.disabled = true; submit.textContent = "Submitting Request…";
+      const r = await api("POST", "/v1/leases", body, createKey); location.hash = `#/lease/${encodeURIComponent(r.lease_id)}`;
+      }
+      catch (e) { const message = document.getElementById("msg"); message.textContent = e.message; (invalidField ? document.getElementById(invalidField) : message).focus(); }
+      finally { submit.disabled = false; submit.textContent = reviewed ? "Create Lease and Start Provisioning" : "Review Lease"; }
     };
   }
 
@@ -162,40 +408,44 @@
       try { cost = await api("GET", `/v1/leases/${id}/cost`); } catch (e) { cost = null; }
       const p = l.activity_policy || {};
       view.innerHTML = `
-        <div class="panel"><div class="row"><h2 style="margin:0">${esc(l.name)}</h2><span class="muted">${esc(l.blueprint_ref)}, ${esc((l.parameters || {}).size)}</span>
-          <span style="flex:1"></span><button class="danger" id="reclaim">Reclaim now</button></div>
+        <div class="page-intro"><p class="eyebrow"><a href="#/leases">Leases</a> / ${esc(l.name)}</p><h1 class="page-title">${esc(l.name)}</h1>
+          <p class="page-summary">${esc(l.blueprint_ref)} · ${esc((l.parameters || {}).size)} · ${l.environments.length} environment${l.environments.length === 1 ? "" : "s"}</p></div>
+        <div class="panel"><div class="panel-head"><div><h2>Lease settings</h2><p class="panel-subtitle">Schedule, expiry, and data policy apply to this Lease.</p></div></div>
           <p class="muted">Valid ${fmt(l.starts_at)} to ${fmt(l.expires_at)}. Mode <b>${esc(p.mode)}</b>
           ${p.mode === "schedule" ? `${esc((p.schedule || {}).start)}-${esc((p.schedule || {}).end)}` : ""}
           ${p.idle_timeout_minutes ? `, sleeps after ${esc(p.idle_timeout_minutes)} idle minutes` : ""}
           . Image <code>${esc((l.app || {}).image)}</code></p>
-          <div class="row"><label style="margin:0">Extend to</label><input type="datetime-local" id="ext">
+          <div class="row"><label for="ext">Extend to</label><input type="datetime-local" id="ext">
             <button id="extend">Extend</button>
             <button id="switch">Switch to ${p.mode === "schedule" ? "on demand" : "schedule"}</button></div>
         </div>
-        <div class="panel"><h2>Environments</h2><table>
-          <tr><th>Name</th><th>State</th><th>URL</th><th>Instances</th><th></th></tr>
+        <div class="panel"><div class="panel-head"><div><h2>Environments</h2><p class="panel-subtitle">Observed state and requested state are shown separately.</p></div></div><div class="table-wrap environment-table"><table>
+          <tr><th>Name</th><th>Observed / desired</th><th>URL</th><th>Resources / last check</th><th>Actions</th></tr>
           ${l.environments.map((e) => `<tr>
-            <td><b>${esc(e.name)}</b><br><span class="muted">${esc(e.environment_id)}</span></td>
-            <td>${badge(e.availability)}<br><span class="muted">desired: ${esc(e.desired || "-")}</span>
+            <td data-label="Environment"><a class="table-name" href="#/environment/${encodeURIComponent(e.environment_id)}">${esc(e.name)}</a><br><code>${esc(e.environment_id)}</code></td>
+            <td data-label="Observed / desired">${badge(e.availability)}<br><span class="muted">Desired: ${esc(e.desired || "Not set")}</span>
               ${e.blocked_reason ? `<div class="err">${esc(e.blocked_reason.code)}: ${esc(String(e.blocked_reason.detail || "").slice(0, 200))}</div>` : ""}</td>
-            <td><a href="${esc(e.url)}" target="_blank">open</a>${e.app_url ? `<br><a href="${esc(e.app_url)}" target="_blank" class="muted">application</a>` : ""}</td>
-            <td>${insts(e.instances)}<br><span class="muted">observed ${fmt(e.observed_at)}</span></td>
-            <td class="row"><button data-wake="${esc(e.environment_id)}">Wake now</button><button data-sleep="${esc(e.environment_id)}">Sleep</button>
-              <button data-ops="${esc(e.environment_id)}">History</button></td></tr>`).join("")}
-        </table><div id="ops"></div></div>
-        ${cost ? `<div class="panel"><h2>Estimated cost <span class="muted" style="font-size:13px">(${fmt(cost.from)} to ${fmt(cost.to)}, USD)</span></h2>
-          <div class="grid"><div><div class="muted">Always on</div><div class="kpi">${cost.totals.always_on.toFixed(2)}</div></div>
-          <div><div class="muted">Scheduled EC2/RDS stop only</div><div class="kpi">${cost.totals.stop_only.toFixed(2)}</div></div>
-          <div><div class="muted">InfraFlow (actual, from the transition log)</div><div class="kpi">${cost.totals.infraflow.toFixed(2)}</div></div></div></div>` : ""}`;
+            <td data-label="URL"><a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">Public URL</a>${e.app_url ? `<br><a href="${esc(e.app_url)}" target="_blank" rel="noopener noreferrer" class="muted">Application URL</a>` : ""}</td>
+            <td data-label="Resources / last check">${insts(e.instances)}<br><span class="muted">Observed: ${fmt(e.observed_at)}</span></td>
+            <td data-label="Actions"><a class="btn" href="#/environment/${encodeURIComponent(e.environment_id)}">View details</a></td></tr>`).join("")}
+        </table></div></div>
+        ${cost ? `<div class="panel"><h2>Estimated cost</h2><p class="panel-subtitle">${fmt(cost.from)} to ${fmt(cost.to)} · USD · unit-price estimate</p>
+          <div class="grid"><div><div class="muted">Always on</div><div class="kpi">${number.format(cost.totals.always_on)}</div></div>
+          <div><div class="muted">Scheduled EC2/RDS stop only</div><div class="kpi">${number.format(cost.totals.stop_only)}</div></div>
+          <div><div class="muted">InfraFlow estimate from transition log</div><div class="kpi">${number.format(cost.totals.infraflow)}</div></div></div>
+          <p class="cost-note">These are estimates, not AWS billed charges. Storage and other residual costs may continue while asleep.</p></div>` : ""}
+        <div class="panel"><h2>Reclaim this Lease</h2><p class="muted">Reclaim can remove infrastructure for every environment in this Lease. Review your data policy and operation status first.</p><button class="danger" id="reclaim" type="button">Review reclaim</button>
+          <div id="reclaim-review" class="review-box" hidden><h3>Review Reclaim Request</h3><p>Environments: ${l.environments.map((e) => esc(e.name)).join(", ")}. Final database backup: ${(l.data_policy || {}).keep_final_backup ? "keep" : "do not keep"}.</p>
+            <p class="muted">The current API does not provide a verified exclusive/retained/shared resource inventory or backup result before this request. Check each Environment and your data policy.</p>
+            <label class="check-line"><input id="reclaim-ack" type="checkbox"> I understand this request can remove infrastructure for every Environment in this Lease.</label>
+            <div class="row"><button class="danger" id="reclaim-submit" type="button" disabled>Submit Reclaim Request</button><button id="reclaim-cancel" type="button">Cancel</button></div></div></div>`;
       bind(l);
     };
     const bind = (l) => {
-      view.querySelectorAll("[data-wake]").forEach((b) => (b.onclick = () => act("POST", `/v1/environments/${b.dataset.wake}/wake`, {})));
-      view.querySelectorAll("[data-sleep]").forEach((b) => (b.onclick = () => act("POST", `/v1/environments/${b.dataset.sleep}/sleep`, {})));
-      view.querySelectorAll("[data-ops]").forEach((b) => (b.onclick = () => showOps(b.dataset.ops)));
-      document.getElementById("reclaim").onclick = () => {
-        if (confirm(`Reclaim the whole Lease ${l.name}? Its infrastructure will be deleted according to the selected data policy.`)) act("POST", `/v1/leases/${id}/reclaim`, { confirm: true });
-      };
+      document.getElementById("reclaim").onclick = () => { document.getElementById("reclaim-review").hidden = false; document.getElementById("reclaim-ack").focus(); };
+      document.getElementById("reclaim-ack").onchange = (event) => { document.getElementById("reclaim-submit").disabled = !event.target.checked; };
+      document.getElementById("reclaim-cancel").onclick = () => { document.getElementById("reclaim-review").hidden = true; document.getElementById("reclaim-ack").checked = false; document.getElementById("reclaim-submit").disabled = true; document.getElementById("reclaim").focus(); };
+      document.getElementById("reclaim-submit").onclick = async () => { document.getElementById("reclaim-submit").disabled = true; await act("POST", `/v1/leases/${id}/reclaim`, { confirm: true }); };
       document.getElementById("extend").onclick = () => {
         const v = document.getElementById("ext").value;
         if (v) act("POST", `/v1/leases/${id}/extend`, { expires_at: new Date(v).toISOString(), version: l.version });
@@ -206,20 +456,58 @@
         act("PUT", `/v1/leases/${id}/activity-policy`, { activity_policy: p, version: l.version });
       };
     };
-    const act = async (m, path, body) => { try { await api(m, path, body); await draw(); } catch (e) { fail(e); } };
-    const showOps = async (envId) => {
-      try {
-        const r = await api("GET", `/v1/environments/${envId}/operations`);
-        document.getElementById("ops").innerHTML = `<h3>Operation history: ${esc(envId)}</h3><table>
-          <tr><th>Time</th><th>Action</th><th>Source</th><th>Result</th><th>Plan</th></tr>
-          ${r.items.map((o) => `<tr><td>${fmt(o.requested_at)}</td><td>${esc(o.action)} to ${esc(o.target_level || "")}</td><td>${esc(o.source)}</td>
-            <td>${badge(o.status)}${o.error ? `<div class="err">${esc(o.error.code)}</div>` : ""}</td>
-            <td>${o.plan ? o.plan.stages.map((s) => `<div><code>${esc(s.name)}</code> ${s.terraform ? esc(JSON.stringify(s.terraform)) : ""} ${esc(s.drivers.join(", "))}</div>`).join("") +
-              (o.plan.model_check ? `<div class="muted">model check: ${o.plan.model_check.passed ? "pass" : "fail"}, ${o.plan.model_check.states_explored} states</div>` : "") : ""}</td></tr>`).join("")}</table>`;
-      } catch (e) { fail(e); }
+    const act = async (m, path, body) => { try { await api(m, path, body); await draw(); view.insertAdjacentHTML("afterbegin", `<div class="panel" role="status">Request accepted. Follow the operation history and observed state for the verified outcome.</div>`); } catch (e) { fail(e); } };
+    await draw();
+    pollTimer = setInterval(() => { if (document.visibilityState === "visible" && !view.contains(document.activeElement)) draw(); }, 10000);
+  }
+
+  async function environmentView(id) {
+    const path = `/v1/environments/${encodeURIComponent(id)}`;
+    const draw = async () => {
+      let e, operations;
+      try { [e, operations] = await Promise.all([api("GET", path), api("GET", `${path}/operations`)]); }
+      catch (error) { view.innerHTML = ""; fail(error); return; }
+      const items = operations.items || [];
+      const active = items.find((o) => o.operation_id === e.active_operation_id);
+      const blocked = Boolean(e.blocked || e.blocked_reason || e.availability === "BLOCKED");
+      const terminal = e.status === "RECLAIMED";
+      view.innerHTML = `
+        <div class="page-intro"><p class="eyebrow"><a href="#/environments">Environments</a> / <a href="#/lease/${encodeURIComponent(e.lease_id)}">Lease</a> / Environment</p>
+          <h1 class="page-title">${esc(e.name)}</h1><p class="page-summary">${esc(e.environment_id)} · Checked ${fmt(e.observed_at)}</p></div>
+        ${blocked ? `<div class="alert" role="alert"><strong>Environment blocked</strong><p>${esc(e.blocked_reason && e.blocked_reason.code || "Investigation required")}: ${esc(e.blocked_reason && e.blocked_reason.detail || "Check the operation history and contact an administrator.")}</p></div>` : ""}
+        <div class="panel"><div class="panel-head state-panel-head"><h2>Current state</h2><button id="refresh" type="button" aria-label="Refresh status">${icon("refresh")}<span class="refresh-label">Refresh status</span></button></div><p class="panel-subtitle">Management, observation, and requested state can differ while work is running.</p>
+          <div class="state-grid">
+            <div class="status-item"><small>Management</small>${badge(e.status)}<p class="field-note">Current lifecycle record</p></div>
+            <div class="status-item"><small>Observed availability</small>${badge(e.availability)}<p class="field-note">Resources checked ${fmt(e.observed_at)}</p></div>
+            <div class="status-item"><small>Observed level</small><strong>${esc(e.actual || "Unavailable")}</strong><p class="field-note">From last resource observation</p></div>
+            <div class="status-item"><small>Desired level</small><strong>${esc(e.desired || "Not set")}</strong><p class="field-note">Source: ${esc(e.desired_source || "Unavailable")}</p></div>
+          </div>
+          ${active ? `<div class="operation-banner" role="status"><strong>Operation ${badge(active.status, "operation")}</strong><span>${esc(active.action || "Change")} ${active.target_level ? `→ ${esc(active.target_level)}` : ""} · Requested ${fmt(active.requested_at)}</span><code>${esc(active.operation_id)}</code></div>` : e.active_operation_id ? `<div class="operation-banner" role="status">Operation ${esc(e.active_operation_id)} is active. Refresh to check its outcome.</div>` : ""}
+        </div>
+        <div class="panel"><h2>Access and actions</h2><p class="panel-subtitle">A submitted action starts an operation. Check observed state and history for completion.</p>
+          <p class="row"><a class="btn public-link" href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${icon("external")}Open public URL</a>${e.app_url ? `<a class="btn" href="${esc(e.app_url)}" target="_blank" rel="noopener noreferrer">${icon("external")}Open application</a>` : ""}</p>
+          ${blocked || terminal ? `<p class="muted">${blocked ? "Actions are unavailable while this environment is blocked." : "This environment has been reclaimed."}</p>` : `<div class="action-grid"><button id="wake" type="button" ${e.active_operation_id ? "disabled" : ""}>Wake environment</button><button id="sleep" type="button" ${e.active_operation_id ? "disabled" : ""}>Sleep environment</button></div>`}
+          <div id="action-result" role="status" aria-live="polite"></div>
+        </div>
+        <div class="panel"><h2>Resources</h2><p class="panel-subtitle">Last observed state; it may lag behind a requested change.</p>
+          <div class="resource-list">${Object.entries(e.instances || {}).length ? Object.entries(e.instances).map(([name, state]) => `<div class="resource-item"><strong>${icon("cube")}${esc(name)}</strong>${badge(state, "resource")}</div>`).join("") : `<p class="muted">No resource observation available.</p>`}</div>
+          <p class="field-note">Last activity: ${fmt(e.last_activity_at)} · Awake since: ${fmt(e.awake_since)}</p></div>
+        <div class="panel"><h2>Operation history</h2>${items.length ? `<ol class="operation-list">${items.map((o) => `<li><div class="row"><strong>${esc(o.action || "Change")} ${o.target_level ? `→ ${esc(o.target_level)}` : ""}</strong>${badge(o.status, "operation")}</div><p class="field-note">Requested ${fmt(o.requested_at)} · Started ${fmt(o.started_at)} · Finished ${fmt(o.finished_at)} · Source ${esc(o.source || "Unavailable")}</p>${o.error ? `<p class="err">${esc(o.error.code || "Operation error")}: ${esc(o.error.message || o.error.detail || "Review required")}</p>` : ""}<code>${esc(o.operation_id)}</code></li>`).join("")}</ol>` : `<p class="muted">No operations recorded for this environment.</p>`}</div>`;
+      document.getElementById("refresh").onclick = draw;
+      for (const action of ["wake", "sleep"]) {
+        const button = document.getElementById(action);
+        if (!button) continue;
+        const requestKey = crypto.randomUUID();
+        button.onclick = async () => {
+          document.querySelectorAll("#wake, #sleep").forEach((control) => { control.disabled = true; });
+          try {
+            const result = await api("POST", `${path}/${action}`, {}, requestKey);
+            document.getElementById("action-result").textContent = `Request accepted${result && result.operation_id ? `: operation ${result.operation_id}` : ""}. Refresh status to verify completion.`;
+          } catch (error) { document.getElementById("action-result").textContent = `The request outcome is unclear: ${error.message}. Refresh status and check operation history before trying again.`; }
+        };
+      }
     };
     await draw();
-    pollTimer = setInterval(draw, 10000);
   }
 
   const SAMPLE = {
@@ -237,10 +525,11 @@
   };
 
   function composeView() {
-    view.innerHTML = `<div class="panel"><h2>Compose: check a Blueprint</h2>
-      <p class="muted">Composition checks C1-C6 and model checking over every interleaving of every level transition plan. Try removing the <code>app.db</code> binding or adding the <code>shallow</code> level.</p>
-      <textarea id="bp" rows="18" style="width:100%;font:12px ui-monospace,monospace">${esc(JSON.stringify(SAMPLE, null, 2))}</textarea>
-      <p class="row"><button class="primary" id="check">Check</button></p><div id="out"></div></div>`;
+    view.innerHTML = `<div class="page-intro"><h1 class="page-title">Blueprint Check</h1><p class="page-summary">Check composition and lifecycle safety before using a blueprint.</p></div>
+      <div class="panel"><h2>Blueprint definition</h2>
+      <p class="muted">Checks C1–C6 and every level transition. Try removing the <code>app.db</code> binding or adding the <code>shallow</code> level.</p>
+      <label for="bp">Blueprint JSON</label><textarea id="bp" name="blueprint" rows="18" style="width:100%;font:12px ui-monospace,monospace">${esc(JSON.stringify(SAMPLE, null, 2))}</textarea>
+      <p class="row"><button class="primary" id="check">Check Blueprint</button></p><div id="out" role="status" aria-live="polite"></div></div>`;
     document.getElementById("check").onclick = async () => {
       try {
         const r = await api("POST", "/v1/blueprints/validate", JSON.parse(document.getElementById("bp").value));
@@ -253,18 +542,25 @@
   }
 
   async function adminView() {
-    view.innerHTML = `<div class="panel"><h2>Environment BLOCKED</h2><div id="blk">Loading...</div></div><div class="panel"><h2>Orphaned resources</h2><div id="orp"></div></div>`;
+    view.innerHTML = `<div class="page-intro"><h1 class="page-title">Admin Workbench</h1><p class="page-summary">Review blocked environments and resources that need investigation.</p></div>
+      <div class="panel"><h2>Blocked Environments</h2><p class="panel-subtitle">Investigate the cause before requesting a retry. A retry request does not verify recovery.</p><div id="blk" role="status">Loading…</div></div><div class="panel"><h2>Orphaned Resources</h2><p class="panel-subtitle">Review resource ownership before any cleanup.</p><div id="orp" role="status">Loading…</div></div>`;
     try {
       const b = await api("GET", "/v1/admin/blocked");
-      document.getElementById("blk").innerHTML = b.items.length ? `<table>${b.items.map((e) => `<tr><td>${esc(e.environment_id)}</td>
-        <td class="err">${esc(e.blocked_reason && e.blocked_reason.code)}: ${esc(e.blocked_reason && String(e.blocked_reason.detail).slice(0, 300))}</td>
-        <td><button data-r="${esc(e.environment_id)}">Unblock (retry)</button></td></tr>`).join("")}</table>` : `<p class="muted">None.</p>`;
-      view.querySelectorAll("[data-r]").forEach((x) => (x.onclick = async () => {
-        const note = prompt("Note: what was fixed?"); if (!note) return;
-        try { await api("POST", `/v1/admin/environments/${x.dataset.r}/resolve`, { action: "retry", note }); adminView(); } catch (e) { fail(e); }
+      document.getElementById("blk").innerHTML = b.items.length ? b.items.map((e) => `<section class="admin-case"><h3><a href="#/environment/${encodeURIComponent(e.environment_id)}">${esc(e.name || e.environment_id)}</a></h3>
+        <p class="err">${esc(e.blocked_reason && e.blocked_reason.code || "Blocked")}: ${esc(e.blocked_reason && String(e.blocked_reason.detail || "Investigation required").slice(0, 300))}</p>
+        <p class="field-note">Last observed: ${fmt(e.observed_at)} · Environment ID: <code>${esc(e.environment_id)}</code></p>
+        <form data-retry="${esc(e.environment_id)}"><label>What was fixed before retry?<textarea name="note" rows="2" required minlength="4" placeholder="Record the investigation and fix"></textarea></label><button type="submit">Request retry</button><p class="field-note" role="status" aria-live="polite"></p></form></section>`).join("") : `<p class="muted">No blocked environments.</p>`;
+      view.querySelectorAll("[data-retry]").forEach((form) => (form.onsubmit = async (event) => {
+        event.preventDefault();
+        const button = form.querySelector("button");
+        button.disabled = true;
+        try {
+          await api("POST", `/v1/admin/environments/${encodeURIComponent(form.dataset.retry)}/resolve`, { action: "retry", note: form.elements.note.value.trim() });
+          form.querySelector('[role="status"]').textContent = "Retry requested. Open the environment to verify its outcome.";
+        } catch (error) { form.querySelector('[role="status"]').textContent = `Request failed: ${error.message}`; button.disabled = false; }
       }));
       const o = await api("GET", "/v1/admin/orphans");
-      document.getElementById("orp").innerHTML = o.items.length ? `<table>${o.items.map((r) => `<tr><td><code>${esc(r.resource_arn)}</code></td><td>${esc(r.env_id_tag)}</td><td>${fmt(r.first_seen)}</td></tr>`).join("")}</table>` : `<p class="muted">None.</p>`;
+      document.getElementById("orp").innerHTML = o.items.length ? `<div class="table-wrap"><table><tr><th>Resource</th><th>Environment tag</th><th>First seen</th></tr>${o.items.map((r) => `<tr><td><code>${esc(r.resource_arn)}</code></td><td>${esc(r.env_id_tag)}</td><td>${fmt(r.first_seen)}</td></tr>`).join("")}</table></div>` : `<p class="muted">No orphaned resources recorded.</p>`;
     } catch (e) { fail(e); }
   }
 
@@ -272,16 +568,38 @@
   function route() {
     clearInterval(pollTimer);
     const c = claims();
+    document.body.classList.toggle("signed-out", !c);
     document.getElementById("who").textContent = c ? `${c.email || ""} (${c["custom:org_id"] || "org_default"})` : "";
     document.getElementById("logout").hidden = !c;
-    if (!c) return loginView();
-    const h = location.hash || "#/";
+    document.querySelector(".primary-nav").hidden = !c;
+    document.querySelector('.primary-nav a[href="#/admin"]').hidden = !isAdmin(c);
+    if (!c) { document.title = "Sign in · InfraFlow"; return loginView(); }
+    let h = location.hash || "#/";
+    if (h.startsWith("#/?")) {
+      h = `#/environments?${h.slice(3)}`;
+      history.replaceState(null, "", `${location.pathname}${location.search}${h}`);
+    }
+    document.querySelectorAll(".primary-nav a").forEach((a) => {
+      const selected = h === a.getAttribute("href") || (h.startsWith("#/environments?") && a.getAttribute("href") === "#/environments") || (h.startsWith("#/lease/") && a.getAttribute("href") === "#/leases") || (h.startsWith("#/environment/") && a.getAttribute("href") === "#/environments");
+      if (selected) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    });
+    if (window.matchMedia("(max-width: 900px)").matches) document.querySelector('.primary-nav a[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    document.title = h.startsWith("#/lease/") ? "Lease · InfraFlow" : h.startsWith("#/environment/") ? "Environment · InfraFlow" : `${h === "#/new" ? "Create Lease" : h === "#/admin" ? "Admin" : h === "#/compose" ? "Blueprint check" : h === "#/leases" ? "Leases" : h.startsWith("#/environments") ? "Environments" : "Overview"} · InfraFlow`;
     let m;
     if (h === "#/new") return createView();
+    if (h === "#/leases") return dashboard();
+    if (h === "#/environments" || h.startsWith("#/environments?")) return environmentsView();
     if (h === "#/compose") return composeView();
-    if (h === "#/admin") return adminView();
+    if (h === "#/admin") {
+      if (!isAdmin(c)) {
+        view.innerHTML = `<div class="page-intro"><h1 class="page-title">Access denied</h1><p class="page-summary">The Admin Workbench is available to administrators only.</p></div>`;
+        return;
+      }
+      return adminView();
+    }
+    if ((m = h.match(/^#\/environment\/(.+)$/))) return environmentView(decodeURIComponent(m[1]));
     if ((m = h.match(/^#\/lease\/(.+)$/))) return leaseView(m[1]);
-    return dashboard();
+    return overviewView();
   }
   document.getElementById("logout").onclick = () => { store.clear(); route(); };
   window.addEventListener("hashchange", route);
