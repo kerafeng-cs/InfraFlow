@@ -93,11 +93,34 @@
         const count = (lease) => (lease.environments || []).filter((env) => ["BLOCKED", "UNKNOWN"].includes(env.availability)).length;
         return count(b) - count(a) || new Date(a.expires_at) - new Date(b.expires_at);
       });
+      const circumference = 2 * Math.PI * 76;
+      let arcOffset = 0;
+      const donutArcs = environments.length ? groups.filter(([, value]) => value).map(([, value, type]) => {
+        const length = value / environments.length * circumference;
+        const arc = `<circle class="donut-${type}" cx="110" cy="110" r="76" fill="none" stroke-width="22" stroke-dasharray="${length} ${circumference}" stroke-dashoffset="${-arcOffset}" transform="rotate(-90 110 110)"/>`;
+        arcOffset += length;
+        return arc;
+      }).join("") : "";
+      const now = Date.now();
+      const week = 7 * 864e5;
+      const expiry = [
+        ["Date passed", 0, "past"], ["Next 7 days", 0, "soon"], ["8–30 days", 0, "month"], ["Later", 0, "later"], ["Date unavailable", 0, "unknown"],
+      ];
+      for (const lease of leases) {
+        const due = Date.parse(lease.expires_at);
+        const index = !Number.isFinite(due) ? 4 : due < now ? 0 : due <= now + week ? 1 : due <= now + 30 * 864e5 ? 2 : 3;
+        expiry[index][1] += 1;
+      }
+      const expiryMax = Math.max(1, ...expiry.map(([, value]) => value));
+      const nextExpiry = leases.filter((lease) => Number.isFinite(Date.parse(lease.expires_at)) && Date.parse(lease.expires_at) >= now).sort((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at))[0];
       document.getElementById("overview-content").innerHTML = `<div class="summary-grid" aria-label="Deployment summary">${metrics.map(([label, value, type, symbol, href]) => `<a class="summary-card overview-metric ${type}" href="${href}" aria-label="${label}: ${value}. View details"><span class="summary-icon">${icon(symbol, "")}</span><small>${label}</small><strong>${value}</strong></a>`).join("")}</div>
         <div class="overview-panels">
-          <section class="panel"><div class="panel-head"><div><h2>Environment status</h2><p class="panel-subtitle">Based on the current Lease list. Requested state is not a completed operation.</p></div></div>
-            ${environments.length ? `<div class="status-distribution" role="img" aria-label="${groups.map(([label, value]) => `${label}: ${value}`).join(", ")}">${groups.filter(([, value]) => value).map(([, value, type]) => `<span class="distribution-${type}" style="flex:${value}"></span>`).join("")}</div><div class="status-legend">${groups.map(([label, value, type]) => `<span><i class="legend-dot distribution-${type}" aria-hidden="true"></i>${label}<strong>${value}</strong></span>`).join("")}</div>` : `<p class="muted">No Environments yet. Create a Lease to begin.</p>`}
+          <section class="panel overview-status"><div class="panel-head"><div><h2>Environment status</h2><p class="panel-subtitle">Current availability from the Lease list. Requested state is not proof of completion.</p></div></div>
+            ${environments.length ? `<div class="overview-status-content"><svg class="overview-donut" viewBox="0 0 220 220" role="img" aria-label="${groups.map(([label, value]) => `${label}: ${value}`).join(", ")}"><circle class="donut-track" cx="110" cy="110" r="76" fill="none" stroke-width="22"/>${donutArcs}<text class="donut-total" x="110" y="106" text-anchor="middle">${environments.length}</text><text class="donut-caption" x="110" y="128" text-anchor="middle">Environments</text></svg><div class="status-legend">${groups.map(([label, value, type]) => `<span><i class="legend-dot distribution-${type}" aria-hidden="true"></i><span>${label}</span><strong>${value}</strong></span>`).join("")}</div></div>` : `<p class="muted">No Environments yet. Create a Lease to begin.</p>`}
             <a class="row-action" href="#/environments">View all Environments →</a></section>
+          <section class="panel overview-expiry"><div class="panel-head"><div><h2>Lease expiry</h2><p class="panel-subtitle">Number of Leases by expiry date, relative to now.</p></div></div>
+            <div class="expiry-chart" role="group" aria-label="Lease expiry date distribution">${expiry.filter(([, value, type]) => value || type !== "unknown").map(([label, value, type]) => `<div class="expiry-row"><span>${label}</span><div class="expiry-track" role="img" aria-label="${label}: ${value} Lease${value === 1 ? "" : "s"}"><i class="expiry-${type}" style="width:${value / expiryMax * 100}%"></i></div><strong>${value}</strong></div>`).join("")}</div>
+            <p class="field-note">${nextExpiry ? `Next: <a href="#/lease/${encodeURIComponent(nextExpiry.lease_id)}">${esc(nextExpiry.name)}</a> · ${fmt(nextExpiry.expires_at)}` : "No upcoming Lease expiry date."}</p></section>
           <section class="panel"><div class="panel-head"><div><h2>Needs attention</h2><p class="panel-subtitle">Blocked and unknown states from the Lease list.</p></div></div>
             ${attention.length ? `<ul class="attention-list">${attention.slice(0, 4).map((env) => `<li><div><strong>${esc(env.name)}</strong><span>${esc(env.lease.name)}</span></div>${badge(env.availability)}<a class="row-action" href="#/lease/${encodeURIComponent(env.lease.lease_id)}">Open Lease</a></li>`).join("")}</ul>${attention.length > 4 ? `<p class="field-note">Showing 4 of ${attention.length}. Open Environments for the full list.</p>` : ""}` : `<div class="overview-clear"><span class="clear-icon">${icon("check", "")}</span><strong>No blocked or unknown Environments</strong><p>Other states may still need time to finish. Check each Environment for its observed result.</p></div>`}
           </section>
