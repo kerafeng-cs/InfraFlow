@@ -487,7 +487,7 @@ def public_status(event, me):
         op = store.get_op(env["active_operation_id"]) or {}
         avail = "WAKING" if op.get("target_level") == "awake" else "SLEEPING"
     can_wake = (not env.get("blocked") and parse_ts(lease["expires_at"]) > t and not lease.get("reclaim_requested")
-                and avail not in ("AWAKE", "WAKING"))
+                and avail not in ("AWAKE", "WAKING", "SLEEPING"))
     progress = None
     if avail == "WAKING":
         op = store.get_op(env["active_operation_id"]) or {}

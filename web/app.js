@@ -32,6 +32,7 @@
       return c;
     } catch (e) { return null; }
   }
+  const isAdmin = (c) => String(c && c["cognito:groups"] || "").replace(/[\[\]]/g, " ").split(/[\s,]+/).includes("infraflow_admins");
 
   // ---------------- API ----------------
   async function api(method, path, body, requestKey) {
@@ -68,7 +69,7 @@
   async function overviewView() {
     view.innerHTML = `<div class="page-intro with-action"><div><h1 class="page-title">Overview</h1>
       <p class="page-summary">Your Leases and Environments at a glance. Open a Lease to review its resources and operations.</p></div>
-      <a class="btn primary" href="#/new">Create Lease</a></div>
+      <div class="overview-actions"><button id="overview-refresh" type="button">${icon("refresh")} Refresh</button><a class="btn primary" href="#/new">Create Lease</a></div></div>
       <div id="overview-content"><p role="status">Loading overview…</p></div>`;
     try {
       const leases = (await api("GET", "/v1/leases")).items || [];
@@ -113,7 +114,10 @@
       }
       const expiryMax = Math.max(1, ...expiry.map(([, value]) => value));
       const nextExpiry = leases.filter((lease) => Number.isFinite(Date.parse(lease.expires_at)) && Date.parse(lease.expires_at) >= now).sort((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at))[0];
-      document.getElementById("overview-content").innerHTML = `<div class="summary-grid" aria-label="Deployment summary">${metrics.map(([label, value, type, symbol, href]) => `<a class="summary-card overview-metric ${type}" href="${href}" aria-label="${label}: ${value}. View details"><span class="summary-icon">${icon(symbol, "")}</span><small>${label}</small><strong>${value}</strong></a>`).join("")}</div>
+      document.getElementById("overview-content").innerHTML = `<section class="panel overview-priority" id="overview-priority" aria-live="polite"><h2>What needs attention</h2><p class="muted">Checking your deployments…</p></section>
+        <div class="overview-freshness" id="overview-freshness" role="status">Checking observation times…</div>
+        <div class="summary-grid" aria-label="Deployment summary">${metrics.map(([label, value, type, symbol, href]) => `<a class="summary-card overview-metric ${type}" href="${href}" aria-label="${label}: ${value}. View details"><span class="summary-icon">${icon(symbol, "")}</span><small>${label}</small><strong>${value}</strong></a>`).join("")}</div>
+        <section class="panel overview-active" id="overview-active" aria-live="polite"><h2>Operations in progress</h2><p class="muted">Checking active operations…</p></section>
         <div class="overview-panels">
           <section class="panel overview-status"><div class="panel-head"><div><h2>Environment status</h2><p class="panel-subtitle">Current availability from the Lease list. Requested state is not proof of completion.</p></div></div>
             ${environments.length ? `<div class="overview-status-content"><svg class="overview-donut" viewBox="0 0 220 220" role="img" aria-label="${groups.map(([label, value]) => `${label}: ${value}`).join(", ")}"><circle class="donut-track" cx="110" cy="110" r="76" fill="none" stroke-width="22"/>${donutArcs}<text class="donut-total" x="110" y="106" text-anchor="middle">${environments.length}</text><text class="donut-caption" x="110" y="128" text-anchor="middle">Environments</text></svg><div class="status-legend">${groups.map(([label, value, type]) => `<span><i class="legend-dot distribution-${type}" aria-hidden="true"></i><span>${label}</span><strong>${value}</strong></span>`).join("")}</div></div>` : `<p class="muted">No Environments yet. Create a Lease to begin.</p>`}
@@ -121,13 +125,56 @@
           <section class="panel overview-expiry"><div class="panel-head"><div><h2>Lease expiry</h2><p class="panel-subtitle">Number of Leases by expiry date, relative to now.</p></div></div>
             <div class="expiry-chart" role="group" aria-label="Lease expiry date distribution">${expiry.filter(([, value, type]) => value || type !== "unknown").map(([label, value, type]) => `<div class="expiry-row"><span>${label}</span><div class="expiry-track" role="img" aria-label="${label}: ${value} Lease${value === 1 ? "" : "s"}"><i class="expiry-${type}" style="width:${value / expiryMax * 100}%"></i></div><strong>${value}</strong></div>`).join("")}</div>
             <p class="field-note">${nextExpiry ? `Next: <a href="#/lease/${encodeURIComponent(nextExpiry.lease_id)}">${esc(nextExpiry.name)}</a> · ${fmt(nextExpiry.expires_at)}` : "No upcoming Lease expiry date."}</p></section>
-          <section class="panel"><div class="panel-head"><div><h2>Needs attention</h2><p class="panel-subtitle">Blocked and unknown states from the Lease list.</p></div></div>
-            ${attention.length ? `<ul class="attention-list">${attention.slice(0, 4).map((env) => `<li><div><strong>${esc(env.name)}</strong><span>${esc(env.lease.name)}</span></div>${badge(env.availability)}<a class="row-action" href="#/lease/${encodeURIComponent(env.lease.lease_id)}">Open Lease</a></li>`).join("")}</ul>${attention.length > 4 ? `<p class="field-note">Showing 4 of ${attention.length}. Open Environments for the full list.</p>` : ""}` : `<div class="overview-clear"><span class="clear-icon">${icon("check", "")}</span><strong>No blocked or unknown Environments</strong><p>Other states may still need time to finish. Check each Environment for its observed result.</p></div>`}
-          </section>
         </div>
+        <div class="overview-insights"><section class="panel"><div class="panel-head"><div><h2>Recent operations</h2><p class="panel-subtitle">Latest recorded actions across your Environments.</p></div></div><div id="overview-operations" role="status">Loading operations…</div></section>
+          <section class="panel"><div class="panel-head"><div><h2>Estimated cost</h2><p class="panel-subtitle">Three scenarios for your Leases.</p></div></div><div id="overview-cost" role="status">Loading estimates…</div></section></div>
         <section class="panel overview-deployments"><div class="panel-head"><div><h2>Your deployments</h2><p class="panel-subtitle">Each deployment is a Lease. Attention first, then by expiry.</p></div><a class="row-action" href="#/leases">View all Leases →</a></div>
           ${ordered.length ? `<div class="table-wrap environment-table"><table><thead><tr><th>Lease</th><th>Blueprint</th><th>Environments</th><th>Mode</th><th>Expires</th><th>Action</th></tr></thead><tbody>${ordered.slice(0, 6).map((lease) => `<tr><td data-label="Lease"><a class="table-name" href="#/lease/${encodeURIComponent(lease.lease_id)}">${esc(lease.name)}</a></td><td data-label="Blueprint">${esc(lease.blueprint_ref)}</td><td data-label="Environments"><div class="overview-environments">${(lease.environments || []).map((env) => `<span><strong>${esc(env.name)}</strong>${badge(env.availability)}</span>`).join("") || `<span class="muted">None</span>`}</div></td><td data-label="Mode">${esc(lease.mode || "Not set")}</td><td data-label="Expires">${fmt(lease.expires_at)}</td><td data-label="Action"><a class="row-action" href="#/lease/${encodeURIComponent(lease.lease_id)}">Open Lease →</a></td></tr>`).join("")}</tbody></table></div>${ordered.length > 6 ? `<p class="field-note">Showing 6 of ${ordered.length} Leases.</p>` : ""}` : `<div class="empty"><strong>No Leases yet</strong><p>Create a Lease to set up your first Environment.</p><a class="btn primary" href="#/new">Create Lease</a></div>`}
         </section>`;
+      const details = await Promise.allSettled(leases.map((lease) => api("GET", `/v1/leases/${encodeURIComponent(lease.lease_id)}`)));
+      if (!document.getElementById("overview-operations")) return;
+      const loaded = details.filter((result) => result.status === "fulfilled").map((result) => result.value);
+      const envRows = loaded.flatMap((lease) => (lease.environments || []).map((env) => ({ ...env, lease })));
+      const operationResults = await Promise.allSettled(envRows.map((env) => api("GET", `/v1/environments/${encodeURIComponent(env.environment_id)}/operations`)));
+      if (!document.getElementById("overview-operations")) return;
+      const operations = operationResults.flatMap((result, index) => result.status === "fulfilled" ? (result.value.items || []).map((op) => ({ ...op, env: envRows[index] })) : []);
+      operations.sort((a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at));
+      const missingOps = details.length - loaded.length + operationResults.filter((result) => result.status === "rejected").length;
+      const checkedAt = Date.now();
+      const monitored = envRows.filter((env) => env.status !== "RECLAIMED");
+      const stale = monitored.filter((env) => !Number.isFinite(Date.parse(env.observed_at)) || checkedAt - Date.parse(env.observed_at) > 15 * 60000);
+      const unavailable = details.length - loaded.length;
+      document.getElementById("overview-freshness").textContent = `${monitored.length - stale.length} of ${monitored.length} active Environments checked within 15 minutes${unavailable ? `; ${unavailable} Lease${unavailable === 1 ? "" : "s"} could not be loaded` : ""}. Last page update: ${dateTime.format(new Date(checkedAt))}.`;
+      const active = envRows.map((env) => ({ env, op: operations.find((op) => op.operation_id === env.active_operation_id) })).filter(({ env }) => env.active_operation_id);
+      const minutesRunning = (op) => op && Number.isFinite(Date.parse(op.started_at || op.requested_at)) ? Math.max(0, Math.floor((checkedAt - Date.parse(op.started_at || op.requested_at)) / 60000)) : null;
+      document.getElementById("overview-active").innerHTML = `<div class="panel-head"><div><h2>Operations in progress</h2><p class="panel-subtitle">Requests can take time; completion is confirmed by the observed state.</p></div><strong class="overview-count">${active.length}</strong></div>${active.length ? `<ul class="overview-operation-list">${active.slice(0, 5).map(({ env, op }) => `<li><div><a class="table-name" href="#/environment/${encodeURIComponent(env.environment_id)}">${esc(env.lease.name)} / ${esc(env.name)}</a><span>${esc(op && op.action || "Operation")} · ${minutesRunning(op) === null ? "Elapsed time unavailable" : `${minutesRunning(op)} min elapsed`}</span></div>${badge(op && op.status || "CHANGING", "operation")}</li>`).join("")}</ul>${active.length > 5 ? `<a class="row-action" href="#/environments?state=CHANGING">View all changing Environments</a>` : ""}` : `<p class="muted">No operations are running.</p>`}`;
+      const urgent = [];
+      for (const env of envRows.filter((env) => ["BLOCKED", "UNKNOWN"].includes(env.availability))) urgent.push({ severity: 0, text: `${env.lease.name} / ${env.name}`, detail: env.blocked_reason && env.blocked_reason.code || env.availability, href: `#/environment/${encodeURIComponent(env.environment_id)}` });
+      for (const env of envRows) {
+        const latest = operations.find((op) => op.env.environment_id === env.environment_id);
+        if (latest && ["FAILED", "BLOCKED", "TIMED_OUT"].includes(latest.status) && !["BLOCKED", "UNKNOWN"].includes(env.availability)) urgent.push({ severity: 1, text: `${env.lease.name} / ${env.name}`, detail: `${latest.action || "Operation"} ${latest.status}`, href: `#/environment/${encodeURIComponent(env.environment_id)}` });
+      }
+      for (const { env, op } of active) {
+        const limit = { WAKE: 45, RECLAIM: 75, PROVISION: 30, SLEEP: 30 }[op && op.action] || 45;
+        if (minutesRunning(op) !== null && minutesRunning(op) > limit) urgent.push({ severity: 1, text: `${env.lease.name} / ${env.name}`, detail: `Operation running ${minutesRunning(op)} min; review its progress`, href: `#/environment/${encodeURIComponent(env.environment_id)}` });
+      }
+      for (const lease of loaded.filter((lease) => !lease.reclaim_requested && !(lease.environments || []).every((env) => env.status === "RECLAIMED") && Number.isFinite(Date.parse(lease.expires_at)) && Date.parse(lease.expires_at) <= checkedAt + 7 * 864e5)) urgent.push({ severity: 2, text: lease.name, detail: Date.parse(lease.expires_at) < checkedAt ? "Lease expiry passed" : `Lease expires ${fmt(lease.expires_at)}`, href: `#/lease/${encodeURIComponent(lease.lease_id)}` });
+      for (const env of stale.filter((env) => !env.active_operation_id && !["BLOCKED", "UNKNOWN", "RECLAIMED"].includes(env.availability))) urgent.push({ severity: 3, text: `${env.lease.name} / ${env.name}`, detail: env.observed_at ? `Last checked ${fmt(env.observed_at)}` : "Not checked yet", href: `#/environment/${encodeURIComponent(env.environment_id)}` });
+      urgent.sort((a, b) => a.severity - b.severity);
+      document.getElementById("overview-priority").innerHTML = `<div class="panel-head"><div><h2>What needs attention</h2><p class="panel-subtitle">Blocked states, failed actions, expiring Leases and old observations.</p></div><strong class="overview-count ${urgent.length ? "has-issues" : ""}">${urgent.length}</strong></div>${missingOps || unavailable ? `<p class="summary-note">Some data could not be loaded. Refresh before relying on this list.</p>` : ""}${urgent.length ? `<ul class="overview-priority-list">${urgent.slice(0, 6).map((item) => `<li><span class="priority-marker priority-${item.severity}" aria-hidden="true"></span><div><strong>${esc(item.text)}</strong><span>${esc(item.detail)}</span></div><a class="row-action" href="${item.href}">Review</a></li>`).join("")}</ul>${urgent.length > 6 ? `<p class="field-note">Showing 6 of ${urgent.length} items. Open Environments and Leases for the rest.</p>` : ""}` : `<p class="overview-all-clear">${missingOps || unavailable ? "No issues found in the loaded records; the full picture is unavailable." : "No issues found in the loaded records. Check observation times above before acting."}</p>`}`;
+      document.getElementById("overview-operations").innerHTML = `${missingOps ? `<p class="summary-note">History is incomplete: ${missingOps} source${missingOps === 1 ? "" : "s"} could not be loaded.</p>` : ""}${operations.length ? `<ul class="overview-operation-list">${operations.slice(0, 5).map((op) => `<li><div><a class="table-name" href="#/environment/${encodeURIComponent(op.env.environment_id)}">${esc(op.env.name)}</a><span>${esc(op.action || "Operation")} · ${fmt(op.requested_at)}</span></div>${badge(op.status, "operation")}</li>`).join("")}</ul><p class="field-note">Showing recent records, up to 20 per Environment. This is not a complete activity trend.</p>` : `<p class="muted">No recorded operations to show.</p>`}`;
+      const costLeases = loaded.filter((lease) => !lease.reclaim_requested && !(lease.environments || []).every((env) => env.status === "RECLAIMED"));
+      const costResults = await Promise.allSettled(costLeases.map((lease) => api("GET", `/v1/leases/${encodeURIComponent(lease.lease_id)}/cost`)));
+      if (!document.getElementById("overview-cost")) return;
+      const costs = costResults.filter((result) => result.status === "fulfilled").map((result) => result.value);
+      const missingCosts = costResults.length - costs.length + unavailable;
+      const totals = ["always_on", "stop_only", "infraflow"].map((key) => costs.reduce((sum, item) => sum + Number((item.totals || {})[key] || 0), 0));
+      const maxCost = Math.max(1, ...totals);
+      const labels = ["Always on", "Stop only", "InfraFlow"];
+      document.getElementById("overview-cost").innerHTML = `${missingCosts ? `<p class="summary-note">${missingCosts} Lease estimate${missingCosts === 1 ? "" : "s"} unavailable; totals below are partial.</p>` : ""}${costs.length ? `<div class="overview-cost-bars" role="group" aria-label="Estimated cost comparison in US dollars">${totals.map((value, index) => `<div class="overview-cost-row"><span>${labels[index]}</span><div class="expiry-track" role="img" aria-label="${labels[index]}: ${number.format(value)} US dollars"><i class="cost-bar-${index}" style="width:${value / maxCost * 100}%"></i></div><strong>$${number.format(value)}</strong></div>`).join("")}</div><p class="field-note">Active Leases only. USD estimates since each Lease began; periods differ. These are not AWS billed charges.</p>` : `<p class="muted">No active Lease estimates to show.</p>`}`;
+      document.getElementById("overview-refresh").onclick = overviewView;
+      clearInterval(pollTimer);
+      pollTimer = setInterval(() => { if (document.visibilityState === "visible" && !view.contains(document.activeElement) && (!location.hash || location.hash === "#/")) overviewView(); }, 60000);
     } catch (error) { document.getElementById("overview-content").innerHTML = ""; fail(error); }
   }
 
@@ -525,6 +572,7 @@
     document.getElementById("who").textContent = c ? `${c.email || ""} (${c["custom:org_id"] || "org_default"})` : "";
     document.getElementById("logout").hidden = !c;
     document.querySelector(".primary-nav").hidden = !c;
+    document.querySelector('.primary-nav a[href="#/admin"]').hidden = !isAdmin(c);
     if (!c) { document.title = "Sign in · InfraFlow"; return loginView(); }
     let h = location.hash || "#/";
     if (h.startsWith("#/?")) {
@@ -542,7 +590,13 @@
     if (h === "#/leases") return dashboard();
     if (h === "#/environments" || h.startsWith("#/environments?")) return environmentsView();
     if (h === "#/compose") return composeView();
-    if (h === "#/admin") return adminView();
+    if (h === "#/admin") {
+      if (!isAdmin(c)) {
+        view.innerHTML = `<div class="page-intro"><h1 class="page-title">Access denied</h1><p class="page-summary">The Admin Workbench is available to administrators only.</p></div>`;
+        return;
+      }
+      return adminView();
+    }
     if ((m = h.match(/^#\/environment\/(.+)$/))) return environmentView(decodeURIComponent(m[1]));
     if ((m = h.match(/^#\/lease\/(.+)$/))) return leaseView(m[1]);
     return overviewView();

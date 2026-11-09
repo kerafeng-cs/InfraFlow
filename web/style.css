@@ -150,6 +150,23 @@ label textarea { font-weight: 400; }
 .summary-card .summary-icon { float: right; display: inline-flex; width: 28px; height: 28px; align-items: center; justify-content: center; border-radius: 8px; color: var(--accent-dark); background: #eff6ff; }
 .overview-metric { display: block; color: inherit; text-decoration: none; }
 .overview-metric:hover { border-color: #bfdbfe; background: #fafdff; text-decoration: none; }
+.overview-freshness { margin: -5px 0 16px; color: var(--muted); font-size: 12px; }
+.overview-priority { border-color: #cbd5e1; }
+.overview-priority:has(.overview-priority-list) { border-left: 3px solid #dc4444; }
+.overview-priority .panel-head, .overview-active .panel-head { align-items: center; }
+.overview-count { min-width: 32px; padding: 3px 9px; border-radius: 999px; background: #f1f5f9; color: var(--ink); text-align: center; font-variant-numeric: tabular-nums; }
+.overview-count.has-issues { background: #fef2f2; color: #b91c1c; }
+.overview-priority-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 26px; margin: 0; padding: 0; list-style: none; }
+.overview-priority-list li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px 0; border-top: 1px solid var(--line); }
+.overview-priority-list li > div { flex: 1; min-width: 0; }
+.overview-priority-list li strong, .overview-priority-list li span:not(.priority-marker) { display: block; overflow-wrap: anywhere; }
+.overview-priority-list li strong { color: var(--ink); font-size: 13px; }
+.overview-priority-list li div span { color: var(--muted); font-size: 12px; }
+.priority-marker { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #ef4444; }
+.priority-2 { background: #f59e0b; }
+.priority-3 { background: #94a3b8; }
+.overview-all-clear { margin: 6px 0 0; color: var(--ok); }
+.overview-active > .muted { margin-bottom: 0; }
 .summary-icon svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .summary-card.awake .summary-icon { color: #047857; background: #ecfdf5; }
 .summary-card.sleeping .summary-icon { color: #475569; background: #f1f5f9; }
@@ -158,7 +175,7 @@ label textarea { font-weight: 400; }
 .overview-panels { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 18px; }
 .overview-panels .panel { min-width: 0; }
 .overview-panels .row-action { display: inline-block; margin-top: 14px; }
-.overview-status { grid-row: span 2; display: flex; flex-direction: column; }
+.overview-status { display: flex; flex-direction: column; }
 .overview-status-content { display: grid; grid-template-columns: minmax(180px, 220px) minmax(0, 1fr); align-items: center; gap: 12px; margin: auto 0; }
 .overview-donut { display: block; width: 100%; max-width: 220px; aspect-ratio: 1; }
 .donut-track { stroke: #e2e8f0; }
@@ -210,6 +227,23 @@ label textarea { font-weight: 400; }
 .overview-environments > span strong { color: var(--ink); font-size: 12px; }
 .overview-environments .badge { font-size: 10px; padding: 2px 7px; }
 .overview-deployments > .field-note { margin: 12px 0 0; }
+.overview-insights { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin: 18px 0; }
+.overview-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.overview-actions button { display: inline-flex; align-items: center; gap: 7px; }
+.overview-insights > .panel { min-width: 0; }
+.overview-operation-list { margin: 0; padding: 0; list-style: none; }
+.overview-operation-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.overview-operation-list li:first-child { border-top: 0; }
+.overview-operation-list li div { min-width: 0; }
+.overview-operation-list li div span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.overview-insights .field-note { margin: 14px 0 0; }
+.overview-cost-bars { display: grid; gap: 16px; padding: 8px 0; }
+.overview-cost-row { display: grid; grid-template-columns: 90px minmax(0, 1fr) 74px; align-items: center; gap: 9px; font-size: 12px; }
+.overview-cost-row > span { color: var(--muted); }
+.overview-cost-row strong { color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+.overview-cost-row i { display: block; height: 100%; border-radius: inherit; background: #94a3b8; }
+.overview-cost-row .cost-bar-1 { background: #60a5fa; }
+.overview-cost-row .cost-bar-2 { background: #0d9488; }
 .cost-note { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
 .empty { padding: 30px 18px; color: var(--muted); text-align: center; }
 .empty strong { display: block; color: var(--ink); font-size: 16px; }
@@ -238,7 +272,7 @@ label textarea { font-weight: 400; }
 .sleep-steps li { margin: 8px 0; }
 .sleep-icon { display: none; }
 code { padding: 2px 5px; border-radius: 4px; background: var(--bg); font: 12px/1.5 "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
-@media (max-width: 1100px) { .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .overview-panels { grid-template-columns: 1fr; } .overview-status { grid-row: auto; } }
+@media (max-width: 1100px) { .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .overview-panels, .overview-insights { grid-template-columns: 1fr; } .overview-status { grid-row: auto; } }
 @media (max-width: 900px) {
   .app-header { position: static; width: auto; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 12px; padding: 14px 16px 0; border-right: 0; border-bottom: 1px solid var(--line); }
   .brand { margin: 0; }
@@ -250,6 +284,7 @@ code { padding: 2px 5px; border-radius: 4px; background: var(--bg); font: 12px/1
   .status-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
+  .overview-priority-list { grid-template-columns: 1fr; }
   .page-intro.with-action { align-items: flex-start; flex-direction: column; }
   .panel { padding: 18px 16px; }
   .panel-head { align-items: flex-start; flex-wrap: wrap; }

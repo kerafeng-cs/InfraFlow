@@ -140,6 +140,20 @@ class Flow(unittest.TestCase):
         tot = b["totals"]
         self.assertGreater(tot["always_on"], tot["infraflow"])
 
+    def test_public_wake_is_unavailable_during_sleep_operation(self):
+        st, body = self.create()
+        self.assertEqual(st, 202)
+        env_id, op_id = self.invoked[0]
+        self.run_controller(env_id, op_id)
+        self.complete_last()
+        st, response = self.call("POST", f"/v1/environments/{env_id}/sleep", {}, key="sleep-public")
+        self.assertEqual(st, 202)
+        self.run_controller(env_id, response["operation_id"])
+
+        st, public = self.call("GET", "/v1/public/status", query={"host": env_id})
+        self.assertEqual((st, public["availability"]), (200, "SLEEPING"))
+        self.assertFalse(public["can_wake"])
+
     def test_outside_schedule_only_prepares(self):
         controller._NOW = T0 + timedelta(hours=12)  # 21:00
         st, body = self.create()
