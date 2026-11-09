@@ -108,6 +108,14 @@
   }
 
   function loginView() {
+    if (!cfg.apiUrl || !cfg.region || !cfg.clientId) {
+      document.title = "Connection unavailable · InfraFlow";
+      view.innerHTML = `<div class="panel login-panel" role="status">
+        <h1 class="page-title">Console unavailable</h1>
+        <p class="muted">This preview is not connected to an InfraFlow environment. Open the deployed console URL to sign in.</p>
+      </div>`;
+      return;
+    }
     view.innerHTML = `
       <div class="panel login-panel">
         <h1 class="page-title">Sign in</h1>
