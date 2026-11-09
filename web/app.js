@@ -195,9 +195,11 @@
       <h3>Activity policy</h3>
       <div class="grid">
         <div><label for="mode">Mode</label><select id="mode"><option value="schedule">Schedule</option><option value="on_demand">On demand</option></select></div>
+        <div><label for="idle" id="idle-label">Sleep when idle after (minutes; optional)</label><input id="idle" type="number" min="1" placeholder="For example, 90…" aria-describedby="msg"></div>
+      </div>
+      <div class="grid activity-schedule" id="schedule-fields">
         <div><label for="from">Awake from (UTC+7)</label><input id="from" type="time" value="08:00"><label for="to">Awake until (UTC+7)</label><input id="to" type="time" value="19:00" aria-describedby="msg"></div>
         <div><label for="days">Days (1 = Monday to 7 = Sunday)</label><input id="days" value="1,2,3,4,5" autocomplete="off" aria-describedby="msg"></div>
-        <div><label for="idle">Sleep when idle after (minutes; required for On demand)</label><input id="idle" type="number" min="1" placeholder="For example, 90…" aria-describedby="msg"></div>
       </div>
       <h3>Data at expiry</h3>
       <label><input type="checkbox" id="keep" checked> Keep a final backup (database snapshot)</label>
@@ -210,6 +212,14 @@
     } catch (e) { document.getElementById("create").disabled = true; fail(e); }
     view.querySelectorAll("#create-form input, #create-form select").forEach((control) => { if (!control.name) control.name = control.id; });
     const form = document.getElementById("create-form");
+    const syncMode = () => {
+      const onDemand = document.getElementById("mode").value === "on_demand";
+      document.getElementById("schedule-fields").hidden = onDemand;
+      document.getElementById("idle").required = onDemand;
+      document.getElementById("idle-label").textContent = `Sleep when idle after (minutes; ${onDemand ? "required" : "optional"})`;
+    };
+    document.getElementById("mode").addEventListener("change", syncMode);
+    syncMode();
     let reviewed = false; let createKey = null;
     form.addEventListener("input", () => { reviewed = false; createKey = null; document.getElementById("create-review").hidden = true; document.getElementById("create").textContent = "Review Lease"; document.getElementById("msg").textContent = ""; });
     document.getElementById("create-form").onsubmit = async (event) => {
@@ -224,11 +234,13 @@
       if (start >= end || end - start > 120 * 864e5) { invalidField = "end"; throw new Error("Expiry must be after the start and within 120 days."); }
       const idle = v("idle") ? parseInt(v("idle"), 10) : null;
       if (v("mode") === "on_demand" && !idle) { invalidField = "idle"; throw new Error("On demand mode requires an idle sleep time in minutes."); }
-      const days = v("days").split(",").map((x) => x.trim());
-      if (days.length > 7 || days.some((x) => !/^[1-7]$/.test(x)) || new Set(days).size !== days.length) { invalidField = "days"; throw new Error("Enter distinct schedule days from 1 (Monday) to 7 (Sunday), separated by commas."); }
-      if (v("from") >= v("to")) { invalidField = "to"; throw new Error("The scheduled awake end time must be after the start time."); }
-      const policy = { mode: v("mode"), utc_offset_minutes: 420,
-        schedule: { days: days.map(Number), start: v("from"), end: v("to") } };
+      const policy = { mode: v("mode"), utc_offset_minutes: 420 };
+      if (policy.mode === "schedule") {
+        const days = v("days").split(",").map((x) => x.trim());
+        if (days.length > 7 || days.some((x) => !/^[1-7]$/.test(x)) || new Set(days).size !== days.length) { invalidField = "days"; throw new Error("Enter distinct schedule days from 1 (Monday) to 7 (Sunday), separated by commas."); }
+        if (v("from") >= v("to")) { invalidField = "to"; throw new Error("The scheduled awake end time must be after the start time."); }
+        policy.schedule = { days: days.map(Number), start: v("from"), end: v("to") };
+      }
       if (idle) policy.idle_timeout_minutes = idle;
       const body = { name: v("name").trim(), blueprint_ref: v("bp"), parameters: { size: v("size") },
         environments: names,
@@ -238,7 +250,7 @@
       document.getElementById("msg").textContent = "";
       if (!reviewed) {
         const review = document.getElementById("create-review");
-        review.innerHTML = `<h3 tabindex="-1">Review Before Creating</h3><p><strong>${esc(body.name)}</strong> · ${esc(body.blueprint_ref)} · ${esc(body.parameters.size)} · ${names.map(esc).join(", ")}</p><p>From ${fmt(body.starts_at)} to ${fmt(body.expires_at)} · ${esc(policy.mode)} · Final database backup: ${body.data_policy.keep_final_backup ? "keep" : "do not keep"}</p><p>Image: <code>${esc(body.app.image)}</code> · Port ${esc(body.app.port)} · Health path <code>${esc(body.app.health_path)}</code></p><p>${policy.mode === "schedule" ? `Awake ${esc(policy.schedule.start)}–${esc(policy.schedule.end)} (UTC+7), days ${esc(policy.schedule.days.join(", "))}` : `Sleep after ${esc(policy.idle_timeout_minutes)} idle minutes`}</p><p class="muted">Submitting creates the Lease and starts provisioning operations. Check their outcomes on each Environment.</p>`;
+        review.innerHTML = `<h3 tabindex="-1">Review Before Creating</h3><p><strong>${esc(body.name)}</strong> · ${esc(body.blueprint_ref)} · ${esc(body.parameters.size)} · ${names.map(esc).join(", ")}</p><p>From ${fmt(body.starts_at)} to ${fmt(body.expires_at)} · ${esc(policy.mode)} · Final database backup: ${body.data_policy.keep_final_backup ? "keep" : "do not keep"}</p><p>Image: <code>${esc(body.app.image)}</code> · Port ${esc(body.app.port)} · Health path <code>${esc(body.app.health_path)}</code></p><p>${policy.mode === "schedule" ? `Awake ${esc(policy.schedule.start)}–${esc(policy.schedule.end)} (UTC+7), days ${esc(policy.schedule.days.join(", "))}${policy.idle_timeout_minutes ? `; sleep after ${esc(policy.idle_timeout_minutes)} idle minutes` : ""}` : `Sleep after ${esc(policy.idle_timeout_minutes)} idle minutes`}</p><p class="muted">Submitting creates the Lease and starts provisioning operations. Check their outcomes on each Environment.</p>`;
         review.hidden = false; reviewed = true; createKey = crypto.randomUUID(); submit.textContent = "Create Lease and Start Provisioning"; review.scrollIntoView({ block: "nearest" }); review.querySelector("h3").focus({ preventScroll: true }); return;
       }
       submit.disabled = true; submit.textContent = "Submitting Request…";

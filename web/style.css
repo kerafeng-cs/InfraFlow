@@ -41,6 +41,7 @@ input,select,textarea { font:inherit; padding:9px 11px; border:1px solid #b8c4d0
 input[type="checkbox"] { min-height:auto; accent-color:var(--accent); } label { display:block; font-size:13px; font-weight:650; color:var(--ink); margin:12px 0 5px; }
 .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px 18px; }
 .grid input:not([type="checkbox"]),.grid select { width:100%; }
+.activity-schedule { margin-top:8px; }
 label textarea { font-weight:400; }
 .badge { display:inline-block; padding:3px 8px; border-radius:3px; font-size:11px; font-weight:700; letter-spacing:.035em; border:1px solid currentColor; white-space:nowrap; }
 .b-AWAKE,.b-SUCCEEDED { color:var(--ok); background:#e7f5ee; } .b-ASLEEP,.b-PREPARED { color:var(--sleep); background:#edf1f7; }
