@@ -195,8 +195,8 @@
       <h3>Activity policy</h3>
       <div class="grid">
         <div><label for="mode">Mode</label><select id="mode"><option value="schedule">Schedule</option><option value="on_demand">On demand</option></select></div>
-        <div><label for="from">Awake from (UTC+7)</label><input id="from" type="time" value="08:00"><label for="to">Awake until (UTC+7)</label><input id="to" type="time" value="19:00"></div>
-        <div><label for="days">Days (1 = Monday to 7 = Sunday)</label><input id="days" value="1,2,3,4,5"></div>
+        <div><label for="from">Awake from (UTC+7)</label><input id="from" type="time" value="08:00"><label for="to">Awake until (UTC+7)</label><input id="to" type="time" value="19:00" aria-describedby="msg"></div>
+        <div><label for="days">Days (1 = Monday to 7 = Sunday)</label><input id="days" value="1,2,3,4,5" autocomplete="off" aria-describedby="msg"></div>
         <div><label for="idle">Sleep when idle after (minutes; required for On demand)</label><input id="idle" type="number" min="1" placeholder="For example, 90…" aria-describedby="msg"></div>
       </div>
       <h3>Data at expiry</h3>
@@ -224,8 +224,11 @@
       if (start >= end || end - start > 120 * 864e5) { invalidField = "end"; throw new Error("Expiry must be after the start and within 120 days."); }
       const idle = v("idle") ? parseInt(v("idle"), 10) : null;
       if (v("mode") === "on_demand" && !idle) { invalidField = "idle"; throw new Error("On demand mode requires an idle sleep time in minutes."); }
+      const days = v("days").split(",").map((x) => x.trim());
+      if (days.length > 7 || days.some((x) => !/^[1-7]$/.test(x)) || new Set(days).size !== days.length) { invalidField = "days"; throw new Error("Enter distinct schedule days from 1 (Monday) to 7 (Sunday), separated by commas."); }
+      if (v("from") >= v("to")) { invalidField = "to"; throw new Error("The scheduled awake end time must be after the start time."); }
       const policy = { mode: v("mode"), utc_offset_minutes: 420,
-        schedule: { days: v("days").split(",").map((x) => parseInt(x, 10)).filter(Boolean), start: v("from"), end: v("to") } };
+        schedule: { days: days.map(Number), start: v("from"), end: v("to") } };
       if (idle) policy.idle_timeout_minutes = idle;
       const body = { name: v("name").trim(), blueprint_ref: v("bp"), parameters: { size: v("size") },
         environments: names,
