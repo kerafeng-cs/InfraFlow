@@ -182,9 +182,9 @@
         <div><label for="name">Lease name (2–16 lowercase letters or digits)</label><input id="name" placeholder="acme" required pattern="[a-z][a-z0-9]{1,15}" autocomplete="off"></div>
         <div><label for="bp">Blueprint</label><select id="bp"></select></div>
         <div><label for="size">Size</label><select id="size"><option>small</option><option>medium</option></select></div>
-        <div><label for="envs">Environments (1–5 distinct names, up to 8 letters or digits each)</label><input id="envs" value="dev,qa" required autocomplete="off"></div>
+        <div><label for="envs">Environments (1–5 distinct names, up to 8 letters or digits each)</label><input id="envs" value="dev,qa" required autocomplete="off" aria-describedby="msg"></div>
         <div><label for="start">Starts</label><input id="start" type="datetime-local" value="${toLocalInput(now)}" required></div>
-        <div><label for="end">Expires</label><input id="end" type="datetime-local" value="${toLocalInput(later)}" required></div>
+        <div><label for="end">Expires</label><input id="end" type="datetime-local" value="${toLocalInput(later)}" required aria-describedby="msg"></div>
       </div>
       <h3>Application (Docker image, linux/amd64)</h3>
       <div class="grid">
@@ -197,12 +197,12 @@
         <div><label for="mode">Mode</label><select id="mode"><option value="schedule">Schedule</option><option value="on_demand">On demand</option></select></div>
         <div><label for="from">Awake from (UTC+7)</label><input id="from" type="time" value="08:00"><label for="to">Awake until (UTC+7)</label><input id="to" type="time" value="19:00"></div>
         <div><label for="days">Days (1 = Monday to 7 = Sunday)</label><input id="days" value="1,2,3,4,5"></div>
-        <div><label for="idle">Sleep when idle after (minutes; required for On demand)</label><input id="idle" type="number" min="1" placeholder="For example, 90…"></div>
+        <div><label for="idle">Sleep when idle after (minutes; required for On demand)</label><input id="idle" type="number" min="1" placeholder="For example, 90…" aria-describedby="msg"></div>
       </div>
       <h3>Data at expiry</h3>
       <label><input type="checkbox" id="keep" checked> Keep a final backup (database snapshot)</label>
       <div id="create-review" class="review-box" hidden></div>
-      <p class="row"><button class="primary" id="create" type="submit">Review Lease</button><span id="msg" class="err" role="alert"></span></p></form></div>`;
+      <p class="row"><button class="primary" id="create" type="submit">Review Lease</button><span id="msg" class="err" role="alert" tabindex="-1"></span></p></form></div>`;
     try {
       const c = await api("GET", "/v1/catalog/blueprints");
       document.getElementById("bp").innerHTML = c.items.map((b) => `<option value="${esc(b.ref)}">${esc(b.ref)}</option>`).join("");
@@ -211,18 +211,19 @@
     view.querySelectorAll("#create-form input, #create-form select").forEach((control) => { if (!control.name) control.name = control.id; });
     const form = document.getElementById("create-form");
     let reviewed = false; let createKey = null;
-    form.addEventListener("input", () => { reviewed = false; createKey = null; document.getElementById("create-review").hidden = true; document.getElementById("create").textContent = "Review Lease"; });
+    form.addEventListener("input", () => { reviewed = false; createKey = null; document.getElementById("create-review").hidden = true; document.getElementById("create").textContent = "Review Lease"; document.getElementById("msg").textContent = ""; });
     document.getElementById("create-form").onsubmit = async (event) => {
       event.preventDefault();
       const submit = document.getElementById("create");
       const v = (id) => document.getElementById(id).value;
+      let invalidField = null;
       try {
       const names = v("envs").split(",").map((x) => x.trim());
-      if (names.length > 5 || names.some((x) => !/^[a-z][a-z0-9]{0,7}$/.test(x)) || new Set(names).size !== names.length) throw new Error("Enter 1–5 different environment names, each up to 8 lowercase letters or digits.");
+      if (names.length > 5 || names.some((x) => !/^[a-z][a-z0-9]{0,7}$/.test(x)) || new Set(names).size !== names.length) { invalidField = "envs"; throw new Error("Enter 1–5 different environment names, each up to 8 lowercase letters or digits."); }
       const start = new Date(v("start")); const end = new Date(v("end"));
-      if (start >= end || end - start > 120 * 864e5) throw new Error("Expiry must be after the start and within 120 days.");
+      if (start >= end || end - start > 120 * 864e5) { invalidField = "end"; throw new Error("Expiry must be after the start and within 120 days."); }
       const idle = v("idle") ? parseInt(v("idle"), 10) : null;
-      if (v("mode") === "on_demand" && !idle) throw new Error("On demand mode requires an idle sleep time in minutes.");
+      if (v("mode") === "on_demand" && !idle) { invalidField = "idle"; throw new Error("On demand mode requires an idle sleep time in minutes."); }
       const policy = { mode: v("mode"), utc_offset_minutes: 420,
         schedule: { days: v("days").split(",").map((x) => parseInt(x, 10)).filter(Boolean), start: v("from"), end: v("to") } };
       if (idle) policy.idle_timeout_minutes = idle;
@@ -234,13 +235,13 @@
       document.getElementById("msg").textContent = "";
       if (!reviewed) {
         const review = document.getElementById("create-review");
-        review.innerHTML = `<h3>Review Before Creating</h3><p><strong>${esc(body.name)}</strong> · ${esc(body.blueprint_ref)} · ${esc(body.parameters.size)} · ${names.map(esc).join(", ")}</p><p>From ${fmt(body.starts_at)} to ${fmt(body.expires_at)} · ${esc(policy.mode)} · Final database backup: ${body.data_policy.keep_final_backup ? "keep" : "do not keep"}</p><p class="muted">Submitting creates the Lease and starts provisioning operations. Check their outcomes on each Environment.</p>`;
-        review.hidden = false; reviewed = true; createKey = crypto.randomUUID(); submit.textContent = "Create Lease and Start Provisioning"; review.scrollIntoView({ block: "nearest" }); return;
+        review.innerHTML = `<h3 tabindex="-1">Review Before Creating</h3><p><strong>${esc(body.name)}</strong> · ${esc(body.blueprint_ref)} · ${esc(body.parameters.size)} · ${names.map(esc).join(", ")}</p><p>From ${fmt(body.starts_at)} to ${fmt(body.expires_at)} · ${esc(policy.mode)} · Final database backup: ${body.data_policy.keep_final_backup ? "keep" : "do not keep"}</p><p>Image: <code>${esc(body.app.image)}</code> · Port ${esc(body.app.port)} · Health path <code>${esc(body.app.health_path)}</code></p><p>${policy.mode === "schedule" ? `Awake ${esc(policy.schedule.start)}–${esc(policy.schedule.end)} (UTC+7), days ${esc(policy.schedule.days.join(", "))}` : `Sleep after ${esc(policy.idle_timeout_minutes)} idle minutes`}</p><p class="muted">Submitting creates the Lease and starts provisioning operations. Check their outcomes on each Environment.</p>`;
+        review.hidden = false; reviewed = true; createKey = crypto.randomUUID(); submit.textContent = "Create Lease and Start Provisioning"; review.scrollIntoView({ block: "nearest" }); review.querySelector("h3").focus({ preventScroll: true }); return;
       }
       submit.disabled = true; submit.textContent = "Submitting Request…";
       const r = await api("POST", "/v1/leases", body, createKey); location.hash = `#/lease/${encodeURIComponent(r.lease_id)}`;
       }
-      catch (e) { document.getElementById("msg").textContent = e.message; }
+      catch (e) { const message = document.getElementById("msg"); message.textContent = e.message; (invalidField ? document.getElementById(invalidField) : message).focus(); }
       finally { submit.disabled = false; submit.textContent = reviewed ? "Create Lease and Start Provisioning" : "Review Lease"; }
     };
   }
