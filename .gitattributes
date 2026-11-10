@@ -1,0 +1,4 @@
+# Keep LF everywhere. Scripts and Terraform files are packaged from the working copy and run on Linux.
+* text=auto eol=lf
+*.woff2 binary
+*.png binary

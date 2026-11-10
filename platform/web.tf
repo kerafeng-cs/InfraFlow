@@ -75,19 +75,22 @@ locals {
   }
 }
 
+# Browsers must revalidate on every load; otherwise they keep serving an old console after a deploy.
 resource "aws_s3_object" "site" {
-  for_each     = local.site_files
-  bucket       = aws_s3_bucket.site.id
-  key          = each.key
-  source       = "${path.module}/../web/${each.key}"
-  etag         = filemd5("${path.module}/../web/${each.key}")
-  content_type = each.value
+  for_each      = local.site_files
+  bucket        = aws_s3_bucket.site.id
+  key           = each.key
+  source        = "${path.module}/../web/${each.key}"
+  etag          = filemd5("${path.module}/../web/${each.key}")
+  content_type  = each.value
+  cache_control = "no-cache"
 }
 
 resource "aws_s3_object" "config" {
-  bucket       = aws_s3_bucket.site.id
-  key          = "config.js"
-  content_type = "application/javascript; charset=utf-8"
+  bucket        = aws_s3_bucket.site.id
+  key           = "config.js"
+  content_type  = "application/javascript; charset=utf-8"
+  cache_control = "no-cache"
   content = "window.INFRAFLOW = ${jsonencode({
     apiUrl   = aws_apigatewayv2_api.this.api_endpoint
     region   = local.region
