@@ -117,7 +117,7 @@ Ordering safety across stages (V7) is guaranteed by the model checker before the
 3. Unexpired manual override (Wake or Sleep from the console or the sleeping page): the override.
 4. Before the Lease start date: asleep at the off-hours level.
 5. `schedule` mode: awake inside the configured window, asleep at the off-hours level outside it.
-6. `on_demand` mode: asleep at the idle level until a wake request, then awake until idle for `idle_timeout_minutes`.
+6. `on_demand` mode: asleep at the idle level until a wake request, then awake until idle for `idle_timeout_minutes`. A wake request holds only until the Environment is awake; from then on the idle rule decides.
 7. Hybrid: in `schedule` mode with an idle timeout, an idle environment sleeps inside its window and stays asleep until activity or a wake request.
 
 The off-hours and idle levels are each `deep` or `hibernate`, set per Lease.
@@ -125,6 +125,26 @@ The off-hours and idle levels are each `deep` or `hibernate`, set per Lease.
 Break-even rule: NAT and ALB are billed per started hour, so an environment is not put to sleep for idleness before it has been awake for `min_awake_minutes` (default 60).
 
 Activity is measured as ALB `RequestCount` over the last five minutes.
+
+For display, the API also reports the next expected change of `D(e, t)` assuming no further activity: the end of a manual hold, the idle deadline (the later of the last request plus the idle timeout and the wake time plus `min_awake_minutes`), the next schedule boundary, or an expiry within seven days.
+
+### Manual actions
+
+Wake, Sleep and Hibernate are evaluated by one rule set, which the API uses both to report `actions` for each Environment and to accept or reject a request. A request is rejected with `409` when:
+
+| Code | Condition |
+|---|---|
+| `LEASE_EXPIRED` | The Lease has expired or is being reclaimed. |
+| `ENVIRONMENT_RECLAIMED` | The Environment has been reclaimed. |
+| `ENVIRONMENT_BLOCKED` | The Environment is blocked. |
+| `OPERATION_IN_PROGRESS` | An operation with the same target is running. |
+| `CONCURRENT_OPERATION` | An operation or accepted request with the opposite target exists. |
+| `REQUEST_PENDING` | A request with the same target was accepted and the controller has not started it yet. |
+| `ALREADY_AT_TARGET` | Wake while awake; Sleep while asleep at the same or a deeper level. |
+
+The sleeping page is the one exception: several visitors may press Wake while a wake is running or pending, and each receives the existing operation instead of an error.
+
+The activity policy is stored from an allow-list of fields for its mode. A schedule sent with an `on_demand` policy, or any unknown field, is dropped; values of the wrong type or out of range are rejected.
 
 ## 4. Control loop
 

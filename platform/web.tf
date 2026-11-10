@@ -65,11 +65,13 @@ resource "aws_s3_bucket_policy" "site" {
 
 locals {
   site_files = {
-    "index.html" = "text/html; charset=utf-8"
-    "sleep.html" = "text/html; charset=utf-8"
-    "app.js"     = "application/javascript; charset=utf-8"
-    "sleep.js"   = "application/javascript; charset=utf-8"
-    "style.css"  = "text/css; charset=utf-8"
+    "index.html"  = "text/html; charset=utf-8"
+    "sleep.html"  = "text/html; charset=utf-8"
+    "app.js"      = "application/javascript; charset=utf-8"
+    "sleep.js"    = "application/javascript; charset=utf-8"
+    "style.css"   = "text/css; charset=utf-8"
+    "logo.svg"    = "image/svg+xml"
+    "favicon.svg" = "image/svg+xml"
   }
 }
 

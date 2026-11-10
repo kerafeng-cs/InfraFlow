@@ -3,21 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f8fafc">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.amazonaws.com; base-uri 'none'; form-action 'self'; object-src 'none'">
+  <meta name="theme-color" content="#0b0f14">
   <title>Environment asleep</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
   <script src="config.js"></script>
 </head>
 <body>
   <main class="sleep-page">
-    <div class="panel sleep-panel">
-      <span class="sleep-icon" aria-hidden="true">↗</span>
-      <p class="eyebrow">InfraFlow · environment access</p>
-      <h1 id="title" class="page-title">Environment</h1>
-      <p id="state" role="status" aria-live="polite">Loading status…</p>
-      <button id="wake" class="primary" hidden>Wake up</button>
-      <ol id="steps" class="sleep-steps" aria-label="Wake progress"></ol>
-      <p id="note" class="muted" role="status" aria-live="polite"></p>
+    <div class="brand"><img src="logo.svg" alt="InfraFlow" width="133" height="34"></div>
+    <div class="panel">
+      <h1 id="title">Environment</h1>
+      <div class="state"><span id="state" class="pill tone-neutral" role="status" aria-live="polite">Loading</span></div>
+      <p id="message" class="muted"></p>
+      <ol id="steps" class="steps" aria-label="Wake progress" hidden></ol>
+      <br>
+      <div class="form-actions"><button id="wake" type="button" class="btn primary" hidden>Wake up</button></div>
+      <p id="note" class="small muted" role="status" aria-live="polite"></p>
     </div>
   </main>
   <script src="sleep.js"></script>

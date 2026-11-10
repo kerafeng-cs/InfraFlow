@@ -3,37 +3,40 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f8fafc">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.amazonaws.com; base-uri 'none'; form-action 'self'; object-src 'none'">
+  <meta name="theme-color" content="#0b0f14">
   <title>InfraFlow</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
   <script src="config.js"></script>
 </head>
 <body>
-  <svg class="icon-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
-    <symbol id="icon-cube" viewBox="0 0 24 24"><path d="m12 2 9 5v10l-9 5-9-5V7l9-5Zm0 0v10m9-5-9 5-9-5m9 5v10"/></symbol>
-    <symbol id="icon-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
-    <symbol id="icon-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
-    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
-    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
-    <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16M8 3v4m8 3v4m-5 3v4"/></symbol>
-    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></symbol>
-    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></symbol>
-    <symbol id="icon-external" viewBox="0 0 24 24"><path d="M13 5h6v6m0-6-9 9M19 14v5H5V5h5"/></symbol>
-  </svg>
-  <a class="skip-link" href="#view">Skip to main content</a>
+  <a class="skip-link" href="#view">Skip to content</a>
   <header class="app-header">
-    <a class="brand" href="#/" aria-label="InfraFlow home"><span class="brand-mark"><svg aria-hidden="true"><use href="#icon-cube"/></svg></span>InfraFlow</a>
-    <nav class="primary-nav" aria-label="Primary navigation" hidden>
-      <a href="#/"><svg class="nav-icon" aria-hidden="true"><use href="#icon-grid"/></svg>Overview</a>
-      <a href="#/environments"><svg class="nav-icon" aria-hidden="true"><use href="#icon-cube"/></svg>Environments</a>
-      <a href="#/leases"><svg class="nav-icon" aria-hidden="true"><use href="#icon-list"/></svg>Leases</a>
-      <a href="#/new"><svg class="nav-icon" aria-hidden="true"><use href="#icon-plus"/></svg>Create Lease</a>
-      <a href="#/compose"><svg class="nav-icon" aria-hidden="true"><use href="#icon-check"/></svg>Blueprint check</a>
-      <a href="#/admin"><svg class="nav-icon" aria-hidden="true"><use href="#icon-settings"/></svg>Admin</a>
+    <a class="brand" href="#/" aria-label="InfraFlow home"><img src="logo.svg" alt="InfraFlow" width="133" height="34"></a>
+    <nav id="nav" class="nav" aria-label="Primary" hidden>
+      <a href="#/">Environments</a>
+      <a href="#/new">New Lease</a>
+      <a href="#/compose">Compose</a>
+      <a href="#/admin" id="nav-admin" hidden>Admin</a>
     </nav>
-    <div class="header-user"><span id="who" class="muted"></span><button id="logout" hidden>Sign out</button></div>
+    <div class="header-user">
+      <span id="who"></span>
+      <button id="sign-out" type="button" class="btn ghost" hidden>Sign out</button>
+    </div>
   </header>
-  <main id="view"></main>
+  <main id="view" tabindex="-1"></main>
+  <dialog id="confirm" class="dialog" aria-labelledby="confirm-title">
+    <form method="dialog">
+      <h2 id="confirm-title"></h2>
+      <div id="confirm-body"></div>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn ghost" type="submit">Cancel</button>
+        <button value="ok" id="confirm-ok" class="btn primary" type="submit"></button>
+      </div>
+    </form>
+  </dialog>
   <script src="app.js"></script>
 </body>
 </html>

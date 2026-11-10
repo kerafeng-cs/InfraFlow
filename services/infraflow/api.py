@@ -15,7 +15,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from . import controller, cost, drivers
-from .desired import DEFAULT_POLICY, iso, manual_override, parse_ts
+from .desired import DEFAULT_POLICY, active_override, iso, manual_override, next_change, parse_ts
 from .ics import checker, static
 from .ics.catalog import load_bundle
 from .ics.compiler import DEFAULT_APP
@@ -25,6 +25,7 @@ from .store import LockError, VersionConflict, get_store
 ADMIN_GROUP = "infraflow_admins"
 LEASE_NAME = re.compile(r"^[a-z][a-z0-9]{1,15}$")
 ENV_NAME = re.compile(r"^[a-z][a-z0-9]{0,7}$")
+MAX_LEASE_DAYS = 120
 MAX_ENVS = 5
 
 
@@ -130,15 +131,92 @@ def _availability(env):
     return a
 
 
-def _env_view(env, detail=True):
+# ---------------------------------------------------------------------------
+# Manual actions: one rule set, used both to render the console and to enforce requests
+# ---------------------------------------------------------------------------
+
+SLEEP_DEPTH = {"deep": 1, "hibernate": 2}
+
+
+def pending_request(env, lease, now):
+    """The target of an accepted request that the controller has not picked up yet, or None.
+
+    Between the API accepting a request and the controller taking the lock, the Environment has no
+    active operation. The unconsumed manual override is what marks the request as pending.
+    """
+    if env.get("active_operation_id"):
+        return None
+    if env.get("status") in ("RECLAIMED", "VERIFYING"):
+        return None
+    ov = active_override({**DEFAULT_POLICY, **(lease.get("activity_policy") or {})}, env, now)
+    if ov and not _satisfied(ov["value"], env.get("actual") or ""):
+        return ov["value"]
+    return None
+
+
+def _satisfied(target, actual):
+    """Whether `actual` already meets `target`: equal, or asleep at the same or a deeper level."""
+    if target == actual:
+        return True
+    if target.startswith("ASLEEP:"):
+        if actual == "PREPARED":
+            return True
+        if actual.startswith("ASLEEP:"):
+            return SLEEP_DEPTH.get(actual.split(":", 1)[1], 0) >= SLEEP_DEPTH.get(target.split(":", 1)[1], 0)
+    return False
+
+
+def action_check(env, lease, target, now):
+    """Why `target` ("AWAKE" or "ASLEEP:<level>") may not be requested now, as (code, message); None if allowed."""
+    if lease.get("reclaim_requested") or parse_ts(lease["expires_at"]) <= now:
+        return "LEASE_EXPIRED", "Lease has expired or is being reclaimed"
+    if env.get("status") in ("RECLAIMED", "VERIFYING"):
+        return "ENVIRONMENT_RECLAIMED", "Environment has been reclaimed"
+    if env.get("blocked"):
+        return "ENVIRONMENT_BLOCKED", "Environment is BLOCKED and requires an administrator"
+    if env.get("active_operation_id"):
+        return "OPERATION_IN_PROGRESS", "an operation is running; wait for it to finish"
+    if pending_request(env, lease, now):
+        return "REQUEST_PENDING", "a request was accepted and is about to start; wait for it to finish"
+    actual = env.get("actual") or ""
+    if target == "AWAKE":
+        if actual == "AWAKE":
+            return "ALREADY_AT_TARGET", "Environment is already awake"
+        return None
+    level = target.split(":", 1)[1]
+    if actual.startswith("ASLEEP:"):
+        if SLEEP_DEPTH.get(level, 0) <= SLEEP_DEPTH.get(actual.split(":", 1)[1], 0):
+            return "ALREADY_AT_TARGET", "Environment is already asleep at this level or deeper"
+        return None
+    if actual != "AWAKE":
+        return "ALREADY_AT_TARGET", "Environment is not running"
+    return None
+
+
+def env_actions(env, lease, now):
+    out = {}
+    for name, target in (("wake", "AWAKE"), ("sleep", "ASLEEP:deep"), ("hibernate", "ASLEEP:hibernate")):
+        blocked = action_check(env, lease, target, now)
+        out[name] = {"allowed": blocked is None, "reason": blocked[0] if blocked else None}
+    return out
+
+
+def _env_view(env, detail=True, lease=None):
     v = {k: env.get(k) for k in ("environment_id", "lease_id", "name", "host", "status", "actual", "desired",
                                  "desired_source", "override", "dns", "app_url", "blocked", "blocked_reason",
-                                 "active_operation_id", "last_activity_at", "awake_since")}
+                                 "active_operation_id", "last_activity_at", "awake_since", "observed_at")}
     v["availability"] = _availability(env)
     if detail:
         v["instances"] = env.get("instances")
-        v["observed_at"] = env.get("observed_at")
         v["snapshots"] = env.get("snapshots")
+    if env.get("active_operation_id"):
+        op = get_store().get_op(env["active_operation_id"]) or {}
+        v["operation"] = {k: op.get(k) for k in ("operation_id", "action", "target_level", "status", "requested_at", "started_at")}
+    if lease is not None:
+        t = _now()
+        v["actions"] = env_actions(env, lease, t)
+        v["requested"] = pending_request(env, lease, t)
+        v["next_change"] = next_change(lease, env, t)
     v["url"] = _public_url(env)
     return v
 
@@ -201,22 +279,66 @@ def validate_blueprint(event, me):
 # Lease
 # ---------------------------------------------------------------------------
 
+HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _int_in(pol, key, lo, hi, required=False):
+    v = pol.get(key)
+    if v is None or v == "":
+        if required:
+            raise ApiError(400, "INVALID_REQUEST", f"activity_policy.{key} is required")
+        return None
+    if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+        raise ApiError(400, "INVALID_REQUEST", f"activity_policy.{key} must be an integer in [{lo}, {hi}]")
+    return v
+
+
+def _level(pol, key):
+    v = pol.get(key, DEFAULT_POLICY[key])
+    if v not in ("deep", "hibernate"):
+        raise ApiError(400, "INVALID_REQUEST", f"activity_policy.{key} must be deep or hibernate")
+    return v
+
+
 def _validate_policy(pol):
-    pol = {**DEFAULT_POLICY, **(pol or {})}
-    if pol["mode"] not in ("schedule", "on_demand"):
+    """Builds the stored policy from an allow-list of fields for the selected mode.
+
+    Fields that do not apply to the mode (for example a schedule in on_demand mode) and unknown
+    fields are dropped, so the stored policy never carries data that a client did not need to send.
+    """
+    if not isinstance(pol, dict):
+        raise ApiError(400, "INVALID_REQUEST", "activity_policy must be an object")
+    mode = pol.get("mode")
+    if mode not in ("schedule", "on_demand"):
         raise ApiError(400, "INVALID_REQUEST", "activity_policy.mode must be schedule or on_demand")
-    if pol["mode"] == "on_demand" and not pol.get("idle_timeout_minutes"):
-        raise ApiError(400, "INVALID_REQUEST", "on_demand requires idle_timeout_minutes")
-    if pol["mode"] == "schedule":
-        sch = pol.get("schedule") or {}
-        if not re.match(r"^\d\d:\d\d$", sch.get("start", "")) or not re.match(r"^\d\d:\d\d$", sch.get("end", "")):
-            raise ApiError(400, "INVALID_REQUEST", "schedule.start and schedule.end must be HH:MM")
-    for k in ("off_hours_level", "idle_level"):
-        if pol[k] not in ("deep", "hibernate"):
-            raise ApiError(400, "INVALID_REQUEST", f"{k} must be deep or hibernate")
-    if not 1 <= int(pol.get("manual_wake_hours", 2)) <= 8:
-        raise ApiError(400, "INVALID_REQUEST", "manual_wake_hours must be in [1, 8]")
-    return pol
+    offset = _int_in(pol, "utc_offset_minutes", -720, 840)
+    out = {
+        "mode": mode,
+        "utc_offset_minutes": DEFAULT_POLICY["utc_offset_minutes"] if offset is None else offset,
+        "idle_level": _level(pol, "idle_level"),
+        "manual_wake_hours": _int_in(pol, "manual_wake_hours", 1, 8) or DEFAULT_POLICY["manual_wake_hours"],
+    }
+    if mode == "on_demand":
+        out["idle_timeout_minutes"] = _int_in(pol, "idle_timeout_minutes", 5, 1440, required=True)
+        return out
+    sch = pol.get("schedule")
+    if not isinstance(sch, dict):
+        raise ApiError(400, "INVALID_REQUEST", "activity_policy.schedule is required in schedule mode")
+    days = sch.get("days")
+    if (not isinstance(days, list) or not days or len(set(days)) != len(days)
+            or not all(isinstance(d, int) and not isinstance(d, bool) and 1 <= d <= 7 for d in days)):
+        raise ApiError(400, "INVALID_REQUEST", "schedule.days must be distinct integers in [1, 7]")
+    start, end = sch.get("start"), sch.get("end")
+    if not isinstance(start, str) or not isinstance(end, str) or not HHMM.match(start) or not HHMM.match(end):
+        raise ApiError(400, "INVALID_REQUEST", "schedule.start and schedule.end must be HH:MM")
+    if start >= end:
+        raise ApiError(400, "INVALID_REQUEST", "schedule.end must be later than schedule.start")
+    out["schedule"] = {"days": sorted(days), "start": start, "end": end}
+    out["off_hours_level"] = _level(pol, "off_hours_level")
+    idle = _int_in(pol, "idle_timeout_minutes", 5, 1440)
+    if idle is not None:
+        out["idle_timeout_minutes"] = idle
+    return out
 
 
 def create_lease(event, me):
@@ -239,8 +361,8 @@ def create_lease(event, me):
         starts, expires = parse_ts(b.get("starts_at")) or _now(), parse_ts(b.get("expires_at"))
         if expires is None or expires <= starts:
             raise ApiError(400, "INVALID_REQUEST", "expires_at must be later than starts_at")
-        if expires - starts > timedelta(days=120):
-            raise ApiError(400, "ORG_LIMIT_EXCEEDED", "the maximum Lease duration is 120 days")
+        if expires - starts > timedelta(days=MAX_LEASE_DAYS):
+            raise ApiError(400, "ORG_LIMIT_EXCEEDED", f"the maximum Lease duration is {MAX_LEASE_DAYS} days")
         size = (b.get("parameters") or {}).get("size", "small")
         if size not in ("small", "medium"):
             raise ApiError(400, "INVALID_REQUEST", "size must be small or medium")
@@ -252,7 +374,7 @@ def create_lease(event, me):
         dp = b.get("data_policy") or {}
         if "keep_final_backup" not in dp:
             raise ApiError(400, "INVALID_REQUEST", "data_policy.keep_final_backup must be set explicitly when creating a Lease")
-        policy = _validate_policy(b.get("activity_policy"))
+        policy = _validate_policy(b.get("activity_policy") or {"mode": "schedule", "schedule": DEFAULT_POLICY["schedule"]})
         for e in envs:
             if store.find_env_by_host(f"{name}-{e}"):
                 raise ApiError(409, "NAME_TAKEN", f"{name}-{e} already exists")
@@ -291,14 +413,14 @@ def list_leases(event, me):
         items.append({"lease_id": l["lease_id"], "name": l["name"], "blueprint_ref": l["blueprint_ref"],
                       "starts_at": l["starts_at"], "expires_at": l["expires_at"],
                       "mode": (l.get("activity_policy") or {}).get("mode"),
-                      "environments": [{"name": e["name"], "availability": _availability(e)} for e in envs]})
+                      "environments": [_env_view(e, detail=False, lease=l) for e in sorted(envs, key=lambda x: x["name"])]})
     return 200, {"items": items}
 
 
 def get_lease(event, me, lease_id):
     store = get_store()
     l = _own_lease(store, me, lease_id)
-    envs = [_env_view(e, detail=True) for e in sorted(store.list_envs(lease_id), key=lambda x: x["name"])]
+    envs = [_env_view(e, detail=True, lease=l) for e in sorted(store.list_envs(lease_id), key=lambda x: x["name"])]
     return 200, {**l, "environments": envs}
 
 
@@ -312,6 +434,8 @@ def extend_lease(event, me, lease_id):
         exp = parse_ts(b.get("expires_at"))
         if exp is None or exp <= parse_ts(l["expires_at"]):
             raise ApiError(400, "INVALID_REQUEST", "the new expires_at must be later than the current one")
+        if exp - parse_ts(l["starts_at"]) > timedelta(days=MAX_LEASE_DAYS):
+            raise ApiError(400, "ORG_LIMIT_EXCEEDED", f"the maximum Lease duration is {MAX_LEASE_DAYS} days")
         try:
             l2 = store.update_lease(lease_id, {"expires_at": iso(exp)}, expected_version=b.get("version"))
         except VersionConflict:
@@ -382,27 +506,34 @@ def lease_cost(event, me, lease_id):
 
 def get_env(event, me, env_id):
     store = get_store()
-    return 200, _env_view(_own_env(store, me, env_id))
+    env = _own_env(store, me, env_id)
+    return 200, _env_view(env, lease=store.get_lease(env["lease_id"]))
 
 
 def _request_state(env, lease, value, me, source):
     """Manual action: writes an override with an expiry; conflicts are resolved against the active operation."""
     store = get_store()
     t = _now()
-    if lease.get("reclaim_requested") or parse_ts(lease["expires_at"]) <= t:
-        raise ApiError(409, "LEASE_EXPIRED", "Lease has expired or is being reclaimed")
-    if env.get("blocked"):
-        raise ApiError(409, "ENVIRONMENT_BLOCKED", "Environment is BLOCKED and requires an administrator")
-    if env.get("status") in ("RECLAIMED", "VERIFYING"):
-        raise ApiError(409, "LEASE_EXPIRED", "Environment has been reclaimed")
-    active = env.get("active_operation_id")
     want_awake = value == "AWAKE"
-    if active:
+    blocked = action_check(env, lease, value, t)
+    if blocked and blocked[0] == "REQUEST_PENDING":
+        if pending_request(env, lease, t) != value:
+            raise ApiError(409, "CONCURRENT_OPERATION", "a request with another target is pending; wait for it to finish")
+        if source == "PUBLIC_URL":
+            return 202, {"pending": True, "existing": True}
+        raise ApiError(409, "REQUEST_PENDING", blocked[1])
+    if blocked and blocked[0] == "OPERATION_IN_PROGRESS":
+        active = env["active_operation_id"]
         op = store.get_op(active) or {}
-        if (op.get("target_level") == "awake") == want_awake:
+        if (op.get("target_level") == "awake") != want_awake:
+            raise ApiError(409, "CONCURRENT_OPERATION", "an operation with the opposite target is running; wait for it to finish",
+                           {"operation_id": active})
+        if source == "PUBLIC_URL":
+            # Several visitors may press Wake on the sleeping page; all of them follow the same operation.
             return 202, {"operation_id": active, "status": op.get("status"), "existing": True}
-        raise ApiError(409, "CONCURRENT_OPERATION", "an operation with the opposite target is running; wait for it to finish",
-                       {"operation_id": active})
+        raise ApiError(409, "OPERATION_IN_PROGRESS", "the same request is already running", {"operation_id": active})
+    if blocked:
+        raise ApiError(409, blocked[0], blocked[1])
     ov = manual_override(value, t, lease.get("activity_policy"), source=source)
     store.update_env(env["environment_id"], {"override": ov, "last_activity_at": iso(t)})
     op_id = controller.new_operation_id()
@@ -486,8 +617,7 @@ def public_status(event, me):
     if avail == "CHANGING":
         op = store.get_op(env["active_operation_id"]) or {}
         avail = "WAKING" if op.get("target_level") == "awake" else "SLEEPING"
-    can_wake = (not env.get("blocked") and parse_ts(lease["expires_at"]) > t and not lease.get("reclaim_requested")
-                and avail not in ("AWAKE", "WAKING", "SLEEPING"))
+    can_wake = action_check(env, lease, "AWAKE", t) is None
     progress = None
     if avail == "WAKING":
         op = store.get_op(env["active_operation_id"]) or {}
@@ -521,7 +651,9 @@ def _admin(me):
 
 def admin_blocked(event, me):
     _admin(me)
-    return 200, {"items": [_env_view(e) for e in get_store().list_envs() if e.get("blocked")]}
+    store = get_store()
+    return 200, {"items": [_env_view(e, lease=store.get_lease(e["lease_id"]))
+                           for e in store.list_envs() if e.get("blocked")]}
 
 
 def admin_resolve(event, me, env_id):

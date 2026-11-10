@@ -55,7 +55,7 @@ Test references are relative to `services/tests/`.
 
 | ID | Scenario | Required behavior | Status | Evidence |
 |---|---|---|---|---|
-| C-01 | Two requests with the same target | The second returns the running operation. | Covered | `test_flow.test_full_cycle` |
+| C-01 | Two requests with the same target | The second is rejected with `OPERATION_IN_PROGRESS`, or `REQUEST_PENDING` before the controller starts it; the sleeping page receives the existing operation. | Covered | `test_flow.test_full_cycle`, `test_request_pending_until_the_controller_starts_it`, `test_public_wake_while_waking_follows_the_same_operation` |
 | C-02 | Requests with opposite targets | The second is rejected with `CONCURRENT_OPERATION`; nothing is queued. | Covered | `test_flow.test_full_cycle` |
 | C-03 | Two writers on one Terraform state | Excluded by the Environment lock and the S3 state lock. | Runtime | Conditional write on `active_operation_id`; `use_lockfile` |
 | C-04 | A resource changed outside InfraFlow (for example an instance started from the console) | Detected by observation and corrected by the next reconciliation. | Covered | `test_flow.test_drift_is_corrected_by_reconcile` |
@@ -63,6 +63,10 @@ Test references are relative to `services/tests/`.
 | C-06 | An operation exceeds its deadline | No success is assumed; the Environment is blocked with `UNKNOWN_OUTCOME`. | Covered | `test_flow.test_operation_past_deadline_blocks_with_unknown_outcome` |
 | C-07 | Extend after expiry or after an early Reclaim request | Rejected with `LEASE_EXPIRED`; the running Reclaim is not reverted. | Covered | `test_flow.test_extend_rejected_once_reclaim_started` |
 | C-08 | Repeated request with the same `Idempotency-Key` | The original response is returned; a different body is rejected. | Covered | `test_flow.test_validation_and_idempotency` |
+| C-09 | Wake while awake, Sleep while asleep | Rejected with `ALREADY_AT_TARGET`; no empty operation is created. The console shows the same availability, with the reason. | Covered | `test_flow.test_actions_follow_the_state` |
+| C-10 | An activity policy carrying fields of the other mode, unknown fields or malformed values | Unused and unknown fields are dropped; malformed values are rejected with `400`. | Covered | `test_flow.test_activity_policy_is_reduced_to_the_fields_of_its_mode`, `test_activity_policy_rejects_malformed_values` |
+| C-11 | Extend beyond the maximum duration | Rejected with `ORG_LIMIT_EXCEEDED`. | Covered | `test_flow.test_extend_is_bounded_by_the_maximum_duration` |
+| C-12 | On demand: a wake request after the environment is awake | The idle rule applies from the wake; the request does not hold the environment awake longer, and does not wake it again after an idle sleep. | Covered | `test_desired.TestOnDemandWake` |
 
 ## Reclaim
 
