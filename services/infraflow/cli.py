@@ -17,6 +17,7 @@ import json
 import sys
 from pathlib import Path
 
+from .classify import classify
 from .ics import checker, compiler, planner, static, validator
 from .ics.catalog import load_bundle, load_from_repo
 from .ics.model import build_graph, make_state
@@ -71,6 +72,26 @@ def _check_bp(cat, bp, label) -> bool:
     _print_check(rep)
     print(f"  => {'PASS' if rep['passed'] else 'FAIL'} ({rep['states_explored']} states explored)")
     return rep["passed"]
+
+
+def cmd_catalog(args) -> int:
+    cat = _catalog(args)
+    order = list((cat.registry.get("categories") or {}).keys())
+
+    def key(ref):
+        category = (cat.blueprint(ref)["blueprint"].get("classification") or {}).get("category")
+        return (order.index(category) if category in order else len(order), ref)
+
+    head = f"{'blueprint':<24} {'category':<9} {'exposure':<9} {'data':<11} {'deepest':<10} {'awake/h':>8} {'asleep/h':>9}"
+    print("Estimated USD per hour at size small.")
+    print(head)
+    print("-" * len(head))
+    for ref in sorted(cat.blueprints, key=key):
+        c = classify(cat, ref)
+        h = c["hourly_usd"]["small"]
+        print(f"{ref:<24} {c['category'] or '-':<9} {c['exposure']:<9} {c['data']:<11} {c['deepest_level']:<10} "
+              f"{h['awake']:>8.4f} {h[c['deepest_level']]:>9.4f}")
+    return 0
 
 
 def cmd_validate_blueprint(args) -> int:
@@ -143,6 +164,7 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("check")
+    sub.add_parser("catalog")
     s = sub.add_parser("validate-blueprint")
     s.add_argument("file")
 
@@ -175,7 +197,7 @@ def main(argv=None) -> int:
     s.add_argument("--expected-hash")
 
     args = ap.parse_args(argv)
-    fn = {"check": cmd_check, "validate-blueprint": cmd_validate_blueprint, "plan": cmd_plan,
+    fn = {"check": cmd_check, "catalog": cmd_catalog, "validate-blueprint": cmd_validate_blueprint, "plan": cmd_plan,
           "compile": cmd_compile, "bundle": cmd_bundle, "validate-plan": cmd_validate_plan}[args.cmd]
     return fn(args)
 

@@ -18,6 +18,11 @@ HASH=$($CLI compile --blueprint "$BLUEPRINT" --components-rel ../components --ou
 echo "compiled_hash $HASH"
 printf '%s' "$TF_VARS_JSON" > "$OUT/stage.auto.tfvars.json"
 
+# A domain in a VPC needs the OpenSearch service-linked role, which exists once per account.
+if grep -q "aws-opensearch-domain/" "$OUT/main.tf"; then
+  aws iam create-service-linked-role --aws-service-name opensearchservice.amazonaws.com >/dev/null 2>&1 || true
+fi
+
 cd "$OUT"
 terraform init -input=false -no-color
 if [ "$MODE" = "destroy" ]; then

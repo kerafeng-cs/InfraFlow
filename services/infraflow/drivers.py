@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import time
+from functools import partial
 
 from .ics.model import ABSENT, PRESENT, RUNNING, SNAPSHOTTED, STOPPED
 
@@ -67,9 +68,10 @@ def nat_describe(ctx) -> str:
     return PRESENT if r["NatGateways"] else ABSENT
 
 
-def _ec2_instance(ctx):
+def _ec2_instance(ctx, role: str = "app"):
+    """EC2 instances are named <name_prefix>-<role>: app, bastion or workbench."""
     r = aws("ec2").describe_instances(Filters=_env_filter(ctx) + [
-        {"Name": "tag:Name", "Values": [f"{ctx['name_prefix']}-app"]},
+        {"Name": "tag:Name", "Values": [f"{ctx['name_prefix']}-{role}"]},
         {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}])
     for res in r["Reservations"]:
         for i in res["Instances"]:
@@ -77,8 +79,8 @@ def _ec2_instance(ctx):
     return None
 
 
-def ec2_describe(ctx) -> str:
-    i = _ec2_instance(ctx)
+def ec2_describe(ctx, role: str = "app") -> str:
+    i = _ec2_instance(ctx, role)
     if i is None:
         return ABSENT
     return RUNNING if i["State"]["Name"] in ("pending", "running") else STOPPED
@@ -92,10 +94,15 @@ def _rds(ctx):
         return None
 
 
+def _snapshotted_or_absent(ctx) -> str:
+    """A data resource that does not exist is SNAPSHOTTED when the Environment holds its snapshot."""
+    return SNAPSHOTTED if (ctx.get("snapshots") or {}).get(ctx.get("instance", "database")) else ABSENT
+
+
 def rds_describe(ctx) -> str:
     db = _rds(ctx)
     if db is None:
-        return SNAPSHOTTED if (ctx.get("snapshots") or {}).get("database") else ABSENT
+        return _snapshotted_or_absent(ctx)
     st = db["DBInstanceStatus"]
     if st in ("stopped", "stopping"):
         return STOPPED
@@ -114,12 +121,77 @@ def elbv2_describe(ctx) -> str:
     return PRESENT if _lb(ctx) else ABSENT
 
 
+def elasticache_describe(ctx) -> str:
+    """A cache node that is being deleted no longer serves and is counted as absent."""
+    try:
+        r = aws("elasticache").describe_cache_clusters(CacheClusterId=f"{ctx['name_prefix']}-redis")
+    except aws("elasticache").exceptions.CacheClusterNotFoundFault:
+        return ABSENT
+    st = r["CacheClusters"][0]["CacheClusterStatus"]
+    return ABSENT if st in ("deleting", "deleted") else PRESENT
+
+
+def _volume(ctx):
+    r = aws("ec2").describe_volumes(Filters=_env_filter(ctx) + [
+        {"Name": "tag:Name", "Values": [f"{ctx['name_prefix']}-data"]},
+        {"Name": "status", "Values": ["creating", "available", "in-use"]}])
+    return r["Volumes"][0] if r["Volumes"] else None
+
+
+def ebs_describe(ctx) -> str:
+    return RUNNING if _volume(ctx) else _snapshotted_or_absent(ctx)
+
+
+def _ecs_service(ctx):
+    np = ctx["name_prefix"]
+    ecs = aws("ecs")
+    try:
+        r = ecs.describe_services(cluster=f"{np}-cluster", services=[f"{np}-svc"])
+    except ecs.exceptions.ClusterNotFoundException:
+        return None
+    svc = next((x for x in r["services"] if x["status"] == "ACTIVE"), None)
+    return svc
+
+
+def ecs_describe(ctx) -> str:
+    svc = _ecs_service(ctx)
+    if svc is None:
+        return ABSENT
+    return STOPPED if svc["desiredCount"] == 0 else RUNNING
+
+
+def sqs_describe(ctx) -> str:
+    sqs = aws("sqs")
+    try:
+        sqs.get_queue_url(QueueName=f"{ctx['name_prefix']}-queue")
+    except sqs.exceptions.QueueDoesNotExist:
+        return ABSENT
+    return PRESENT
+
+
+def opensearch_describe(ctx) -> str:
+    """Matches the domain name of aws-opensearch-domain: <name_prefix>-search, at most 28 characters."""
+    client = aws("opensearch")
+    try:
+        r = client.describe_domain(DomainName=f"{ctx['name_prefix']}-search"[:28])
+    except client.exceptions.ResourceNotFoundException:
+        return ABSENT
+    return ABSENT if r["DomainStatus"].get("Deleted") else PRESENT
+
+
 OBSERVE = {
     "vpc.describe": vpc_describe,
     "nat_gateway.describe": nat_describe,
     "ec2_instance.describe": ec2_describe,
+    "ec2_bastion.describe": partial(ec2_describe, role="bastion"),
+    "ec2_workbench.describe": partial(ec2_describe, role="workbench"),
     "rds_instance.describe": rds_describe,
+    "ebs_volume.describe": ebs_describe,
     "elbv2.describe": elbv2_describe,
+    "elasticache.describe": elasticache_describe,
+    "ecs_service.describe": ecs_describe,
+    "sqs.describe": sqs_describe,
+    "opensearch.describe": opensearch_describe,
 }
 
 
@@ -129,7 +201,7 @@ def observe_all(graph, ctx) -> dict:
         d = graph.instances[u].drivers.get("observe")
         if d not in OBSERVE:
             raise DriverError(f"{u}: no observe driver")
-        out[u] = OBSERVE[d](ctx)
+        out[u] = OBSERVE[d]({**ctx, "instance": u})
     return out
 
 
@@ -137,35 +209,35 @@ def observe_all(graph, ctx) -> dict:
 # actions
 # ---------------------------------------------------------------------------
 
-def ec2_start(ctx, action):
-    i = _ec2_instance(ctx)
+def ec2_start(ctx, action, role: str = "app"):
+    i = _ec2_instance(ctx, role)
     if i is None:
-        raise DriverError("application EC2 instance not found")
+        raise DriverError(f"EC2 instance {role} not found")
     if i["State"]["Name"] in ("stopping",):
-        _poll(lambda: _ec2_instance(ctx)["State"]["Name"], lambda s: s == "stopped", "EC2 stopped")
-    if _ec2_instance(ctx)["State"]["Name"] != "running":
+        _poll(lambda: _ec2_instance(ctx, role)["State"]["Name"], lambda s: s == "stopped", "EC2 stopped")
+    if _ec2_instance(ctx, role)["State"]["Name"] != "running":
         aws("ec2").start_instances(InstanceIds=[i["InstanceId"]])
-        _poll(lambda: _ec2_instance(ctx)["State"]["Name"], lambda s: s == "running", "EC2 running")
+        _poll(lambda: _ec2_instance(ctx, role)["State"]["Name"], lambda s: s == "running", "EC2 running")
         return {"status": "DONE", "observed_state": RUNNING}
     return {"status": "NOOP", "observed_state": RUNNING}
 
 
-def ec2_stop(ctx, action):
-    i = _ec2_instance(ctx)
+def ec2_stop(ctx, action, role: str = "app"):
+    i = _ec2_instance(ctx, role)
     if i is None:
         return {"status": "NOOP", "observed_state": ABSENT}
     if i["State"]["Name"] in ("running", "pending"):
         aws("ec2").stop_instances(InstanceIds=[i["InstanceId"]])
     elif i["State"]["Name"] == "stopped":
         return {"status": "NOOP", "observed_state": STOPPED}
-    _poll(lambda: _ec2_instance(ctx)["State"]["Name"], lambda s: s == "stopped", "EC2 stopped")
+    _poll(lambda: _ec2_instance(ctx, role)["State"]["Name"], lambda s: s == "stopped", "EC2 stopped")
     return {"status": "DONE", "observed_state": STOPPED}
 
 
-def ec2_status_ok(ctx, action):
-    i = _ec2_instance(ctx)
+def ec2_status_ok(ctx, action, role: str = "app"):
+    i = _ec2_instance(ctx, role)
     if i is None:
-        raise DriverError("application EC2 instance not found")
+        raise DriverError(f"EC2 instance {role} not found")
 
     def st():
         r = aws("ec2").describe_instance_status(InstanceIds=[i["InstanceId"]])
@@ -240,6 +312,66 @@ def rds_snapshot(ctx, action):
     return {"status": "DONE", "snapshot_id": snap_id}
 
 
+def ebs_snapshot(ctx, action):
+    """Snapshots the data volume and waits until the snapshot is `completed`. Idempotent per
+    operation: a retry finds the snapshot by its operation tag. Records the id for rule V3."""
+    from .store import get_store
+
+    ec2 = aws("ec2")
+    vol = _volume(ctx)
+    if vol is None:
+        raise DriverError("data volume to snapshot not found")
+
+    def find():
+        r = ec2.describe_snapshots(OwnerIds=["self"], Filters=_env_filter(ctx) + [
+            {"Name": "tag:infraflow:operation_id", "Values": [ctx["operation_id"]]},
+            {"Name": "volume-id", "Values": [vol["VolumeId"]]}])
+        return r["Snapshots"][0] if r["Snapshots"] else None
+
+    snap = find()
+    if snap is None:
+        snap = ec2.create_snapshot(VolumeId=vol["VolumeId"], Description=f"InfraFlow {ctx['name_prefix']} data",
+                                   TagSpecifications=[{"ResourceType": "snapshot", "Tags": [
+                                       {"Key": "Name", "Value": f"{ctx['name_prefix']}-data"},
+                                       {"Key": "infraflow:env_id", "Value": ctx["environment_id"]},
+                                       {"Key": "infraflow:managed", "Value": "true"},
+                                       {"Key": "infraflow:purpose", "Value": action.get("purpose", "hibernate")},
+                                       {"Key": "infraflow:operation_id", "Value": ctx["operation_id"]}]}])
+    snap_id = snap["SnapshotId"]
+    _poll(lambda: ec2.describe_snapshots(SnapshotIds=[snap_id])["Snapshots"][0]["State"],
+          lambda s: s == "completed", "EBS snapshot completed", interval=20)
+    store = get_store()
+    op = store.get_op(ctx["operation_id"]) or {}
+    snaps = dict(op.get("snapshots") or {})
+    snaps[action["instance"]] = snap_id
+    store.update_op(ctx["operation_id"], {"snapshots": snaps})
+    return {"status": "DONE", "snapshot_id": snap_id}
+
+
+def ecs_start(ctx, action):
+    svc = _ecs_service(ctx)
+    if svc is None:
+        raise DriverError("ECS service not found")
+    status = "NOOP"
+    if svc["desiredCount"] == 0:
+        aws("ecs").update_service(cluster=svc["clusterArn"], service=svc["serviceName"], desiredCount=1)
+        status = "DONE"
+    _poll(lambda: (_ecs_service(ctx) or {}).get("runningCount", 0), lambda n: n >= 1, "ECS task running")
+    return {"status": status, "observed_state": RUNNING}
+
+
+def ecs_stop(ctx, action):
+    svc = _ecs_service(ctx)
+    if svc is None:
+        return {"status": "NOOP", "observed_state": ABSENT}
+    status = "NOOP"
+    if svc["desiredCount"] != 0:
+        aws("ecs").update_service(cluster=svc["clusterArn"], service=svc["serviceName"], desiredCount=0)
+        status = "DONE"
+    _poll(lambda: (_ecs_service(ctx) or {}).get("runningCount", 0), lambda n: n == 0, "ECS tasks stopped")
+    return {"status": status, "observed_state": STOPPED}
+
+
 def rds_available(ctx, action):
     _poll(lambda: (_rds(ctx) or {}).get("DBInstanceStatus"), lambda s: s == "available", "RDS available", interval=20)
     return {"status": "DONE"}
@@ -306,6 +438,15 @@ ACTIONS = {
     "ec2_instance.start": ec2_start,
     "ec2_instance.stop": ec2_stop,
     "ec2_instance.status_ok": ec2_status_ok,
+    "ec2_bastion.start": partial(ec2_start, role="bastion"),
+    "ec2_bastion.stop": partial(ec2_stop, role="bastion"),
+    "ec2_bastion.status_ok": partial(ec2_status_ok, role="bastion"),
+    "ec2_workbench.start": partial(ec2_start, role="workbench"),
+    "ec2_workbench.stop": partial(ec2_stop, role="workbench"),
+    "ec2_workbench.status_ok": partial(ec2_status_ok, role="workbench"),
+    "ebs_volume.snapshot": ebs_snapshot,
+    "ecs_service.start": ecs_start,
+    "ecs_service.stop": ecs_stop,
     "rds_instance.start": rds_start,
     "rds_instance.stop": rds_stop,
     "rds_instance.snapshot": rds_snapshot,

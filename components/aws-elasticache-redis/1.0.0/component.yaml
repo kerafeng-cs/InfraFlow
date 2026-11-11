@@ -1,0 +1,44 @@
+ics_version: "0.1"
+component:
+  name: aws-elasticache-redis
+  version: 1.0.0
+  owner: infraflow
+  summary: "Single-node Redis 7 on ElastiCache; contents are lost on sleep"
+  billing_class: hourly_no_data
+  data_class: ephemeral
+  resource_types:
+    - aws_elasticache_cluster
+    - aws_elasticache_subnet_group
+    - aws_security_group
+    - aws_vpc_security_group_ingress_rule
+    - aws_ssm_parameter
+  data_resource_types: []
+  primary_resource: aws_elasticache_cluster.this
+  system_inputs: [name_prefix, env_id]
+provides:
+  - port: cache
+    type: cache.redis/v1
+    attributes: { host: host, port: port, security_group_id: security_group_id }
+requires:
+  - port: net
+    type: net.vpc/v1
+    when: present
+    inputs: { vpc_id: vpc_id, private_subnet_ids: subnet_ids }
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+outputs:
+  host:              { stable: false }   # a new node on every wake; clients read it from SSM
+  port:              { stable: true }
+  security_group_id: { stable: false }
+lifecycle:
+  presence_variable: present
+  actions:
+    observe: { driver: elasticache.describe }
+  levels: { awake: PRESENT, shallow: PRESENT, deep: ABSENT, hibernate: ABSENT }
+  serving_states: [PRESENT]
+health:
+  probe: { driver: terraform.presence, timeout_s: 900 }
+cost:
+  - { meter: elasticache_node_hour, in_states: [PRESENT], param: size }
+conformance:
+  claimed_level: L1

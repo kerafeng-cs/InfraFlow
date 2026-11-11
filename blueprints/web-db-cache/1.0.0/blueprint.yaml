@@ -1,0 +1,32 @@
+ics_version: "0.1"
+blueprint:
+  name: web-db-cache
+  version: 1.0.0
+  owner: infraflow
+  summary: "Web application with PostgreSQL and a Redis cache behind an ALB"
+  exposure: public
+  classification:
+    category: web
+    use_cases: ["Staging for an application that uses Redis for sessions or caching", "Load and regression testing with a warm-up phase after wake"]
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+instances:
+  network:  { component: aws-network-basic@1.0.0 }
+  egress:   { component: aws-nat-egress@1.0.0 }
+  database: { component: aws-rds-postgres@1.0.0,      parameters: { size: "${param.size}" } }
+  cache:    { component: aws-elasticache-redis@1.0.0, parameters: { size: "${param.size}" } }
+  app:      { component: aws-ec2-docker-app@1.1.0,    parameters: { size: "${param.size}" } }
+  entry:    { component: aws-alb-https-entry@1.0.0 }
+bindings:                     # from = requires side, to = provides side
+  - { from: egress.net,    to: network.net }
+  - { from: database.net,  to: network.net }
+  - { from: cache.net,     to: network.net }
+  - { from: app.net,       to: network.net }
+  - { from: app.egress,    to: egress.egress }
+  - { from: app.db,        to: database.db }
+  - { from: app.cache,     to: cache.cache }
+  - { from: app.workload,  to: sys.lease_app }
+  - { from: entry.net,     to: network.net }
+  - { from: entry.backend, to: app.http }
+  - { from: sys.dns,       to: entry.public }
+supported_levels: [awake, deep, hibernate]

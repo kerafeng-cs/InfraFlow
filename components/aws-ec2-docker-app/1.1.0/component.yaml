@@ -1,0 +1,75 @@
+ics_version: "0.1"
+component:
+  name: aws-ec2-docker-app
+  version: 1.1.0
+  owner: infraflow
+  summary: "Amazon Linux 2023 EC2 instance in a private subnet running one Docker image"
+  billing_class: stoppable
+  data_class: none
+  resource_types:
+    - aws_instance
+    - aws_security_group
+    - aws_vpc_security_group_egress_rule
+    - aws_vpc_security_group_ingress_rule
+    - aws_iam_role
+    - aws_iam_role_policy
+    - aws_iam_role_policy_attachment
+    - aws_iam_instance_profile
+  data_resource_types: []
+  primary_resource: aws_instance.app
+  system_inputs: [name_prefix, env_id]
+provides:
+  - port: http
+    type: http.backend/v1
+    attributes: { instance_id: instance_id, port: port, health_path: health_path, security_group_id: security_group_id }
+requires:
+  - port: net
+    type: net.vpc/v1
+    when: present
+    inputs: { vpc_id: vpc_id, private_subnet_ids: subnet_ids }
+  - port: egress
+    type: net.egress/v1
+    when: serving                    # needs NAT to pull the image, but reads no values from it
+  - port: db
+    type: db.postgres/v1
+    when: serving
+    optional: true
+    enabled_variable: db_enabled
+    inputs: { host: db_host, port: db_port, name: db_name, user: db_user, password_param: db_password_param, security_group_id: db_security_group_id }
+  - port: cache
+    type: cache.redis/v1
+    when: serving                    # reads the address from SSM at start-up, so no present edge
+    optional: true
+    enabled_variable: cache_enabled
+  - port: queue
+    type: queue.sqs/v1
+    when: serving
+    optional: true
+    enabled_variable: queue_enabled
+    inputs: { queue_url: queue_url, queue_arn: queue_arn }
+  - port: workload
+    type: workload.container/v1
+    when: present
+    inputs: { image: app_image, port: app_port, health_path: app_health_path }
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+outputs:
+  instance_id:       { stable: true }
+  port:              { stable: true }
+  health_path:       { stable: true }
+  security_group_id: { stable: true }
+lifecycle:
+  presence_variable: present
+  actions:
+    observe: { driver: ec2_instance.describe }
+    start:   { driver: ec2_instance.start }
+    stop:    { driver: ec2_instance.stop }
+  levels: { awake: RUNNING, shallow: STOPPED, deep: STOPPED, hibernate: ABSENT }
+  serving_states: [RUNNING]
+health:
+  probe: { driver: ec2_instance.status_ok, timeout_s: 600 }
+cost:
+  - { meter: ec2_instance_hour, in_states: [RUNNING], param: size }
+  - { meter: ebs_gb_month,      in_states: [RUNNING, STOPPED], param: root_volume_gb }
+conformance:
+  claimed_level: L2

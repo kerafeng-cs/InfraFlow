@@ -1,9 +1,11 @@
 ics_version: "0.1"
 blueprint:
-  name: web-db-shallow
+  name: broken-shallow
   version: 1.0.0
   owner: infraflow
   summary: "Negative example: enables level shallow (ALB present, app stopped), so C7 must report A2"
+  classification:
+    category: web
 parameters:
   size: { type: string, enum: [small, medium], default: small }
 instances:

@@ -1,0 +1,55 @@
+ics_version: "0.1"
+component:
+  name: aws-ec2-gpu-workbench
+  version: 1.0.0
+  owner: infraflow
+  summary: "NVIDIA GPU instance (Deep Learning AMI) running one container with a data volume at /data"
+  billing_class: stoppable
+  data_class: none
+  resource_types:
+    - aws_instance
+    - aws_volume_attachment
+    - aws_security_group
+    - aws_vpc_security_group_egress_rule
+    - aws_iam_role
+    - aws_iam_role_policy_attachment
+    - aws_iam_instance_profile
+  data_resource_types: []
+  primary_resource: aws_instance.workbench
+  system_inputs: [name_prefix, env_id]
+provides: []
+requires:
+  - port: net
+    type: net.vpc/v1
+    when: present
+    inputs: { vpc_id: vpc_id, private_subnet_ids: subnet_ids }
+  - port: egress
+    type: net.egress/v1
+    when: serving                    # pulls the image and reaches SSM through NAT
+  - port: volume
+    type: storage.ebs/v1
+    when: present
+    inputs: { volume_id: volume_id, availability_zone: volume_availability_zone }
+  - port: workload
+    type: workload.container/v1
+    when: present
+    inputs: { image: app_image, port: app_port }
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+outputs:
+  instance_id: { stable: true }
+lifecycle:
+  presence_variable: present
+  actions:
+    observe: { driver: ec2_workbench.describe }
+    start:   { driver: ec2_workbench.start }
+    stop:    { driver: ec2_workbench.stop }
+  levels: { awake: RUNNING, shallow: STOPPED, deep: STOPPED, hibernate: ABSENT }
+  serving_states: [RUNNING]
+health:
+  probe: { driver: ec2_workbench.status_ok, timeout_s: 900 }
+cost:
+  - { meter: ec2_instance_hour, in_states: [RUNNING], param: size }
+  - { meter: ebs_gb_month,      in_states: [RUNNING, STOPPED] }
+conformance:
+  claimed_level: L2

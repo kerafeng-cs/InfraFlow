@@ -1,0 +1,60 @@
+ics_version: "0.1"
+component:
+  name: aws-ecs-fargate-service
+  version: 1.0.0
+  owner: infraflow
+  summary: "One Docker image as an ECS service on Fargate, registered into an ALB target group"
+  billing_class: stoppable
+  data_class: none
+  resource_types:
+    - aws_ecs_cluster
+    - aws_ecs_task_definition
+    - aws_ecs_service
+    - aws_cloudwatch_log_group
+    - aws_security_group
+    - aws_vpc_security_group_ingress_rule
+    - aws_vpc_security_group_egress_rule
+    - aws_iam_role
+    - aws_iam_role_policy_attachment
+  data_resource_types: []
+  primary_resource: aws_ecs_service.this
+  system_inputs: [name_prefix, env_id]
+provides: []
+requires:
+  - port: net
+    type: net.vpc/v1
+    when: present
+    inputs: { vpc_id: vpc_id, private_subnet_ids: subnet_ids }
+  - port: egress
+    type: net.egress/v1
+    when: serving                    # pulls the image through NAT
+  - port: target
+    type: lb.target/v1
+    when: present                    # the service registers into the target group
+    inputs: { target_group_arn: target_group_arn, security_group_id: alb_security_group_id }
+  - port: workload
+    type: workload.container/v1
+    when: present
+    inputs: { image: app_image, port: app_port }
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+outputs:
+  cluster_name: { stable: true }
+  service_name: { stable: true }
+lifecycle:
+  presence_variable: present
+  actions:
+    observe: { driver: ecs_service.describe }
+    start:   { driver: ecs_service.start }
+    stop:    { driver: ecs_service.stop }
+  # Fargate is billed per second while tasks run. Deep sleep removes the service with the ALB
+  # it registers into; the cluster, task definition and roles cost nothing.
+  levels: { awake: RUNNING, shallow: STOPPED, deep: ABSENT, hibernate: ABSENT }
+  serving_states: [RUNNING]
+health:
+  probe: { driver: elbv2.target_healthy, timeout_s: 900 }
+cost:
+  - { meter: fargate_vcpu_hour, in_states: [RUNNING], param: size }
+  - { meter: fargate_gb_hour,   in_states: [RUNNING], param: size }
+conformance:
+  claimed_level: L2

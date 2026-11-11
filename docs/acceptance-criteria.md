@@ -24,6 +24,13 @@ Test references are relative to `services/tests/`.
 | L-06 | Hibernate | The database is snapshotted and the snapshot is available before the database is deleted. | Covered | `test_ics.test_hibernate_snapshots_before_delete`, Validator V3 |
 | L-07 | An environment that is already cheaper than the target | It is not woken in order to be put to sleep. | Covered | `test_ics.test_prepared_satisfies_sleep`, `test_flow.test_outside_schedule_only_prepares` |
 | L-08 | Every pair of levels | The generated plan is safe under every interleaving. | Covered | C8 in `python -m infraflow.cli check`, `test_ics.test_web_db_passes_everything` |
+| L-09 | Every blueprint in the catalog | Passes composition and model checking before it can be leased. | Covered | `test_ics.TestCatalog.test_every_blueprint_passes_composition_and_model_checking` |
+| L-10 | A blueprint without a database or cache | Optional ports stay unbound; the application starts without those settings. | Covered | `test_ics.test_optional_port_may_stay_unbound_but_required_may_not`, `test_optional_ports_compile_to_flags` |
+| L-11 | A dependency that is removed while its client still exists (cache in deep sleep) | Rejected by the model checker unless the client reads no inputs from it. | Covered | `test_ics.test_cache_without_ssm_endpoint_would_violate_a1` |
+| L-12 | Hibernate a blueprint whose data lives on an EBS volume (`ml-workbench`) | The instance using the volume is removed first, the volume is snapshotted and the snapshot completes before the volume is deleted; wake restores it. | Covered | `test_ics.test_ml_workbench_snapshots_the_volume_after_removing_the_workbench`, `test_drivers.test_ebs_volume_snapshot_is_recorded_and_idempotent` |
+| L-13 | A container service that registers into the load balancer (`web-ecs`) | The entry exists before the service is created; the health gate precedes DNS. | Covered | `test_ics.test_web_ecs_creates_the_entry_before_the_service` |
+| L-14 | A queue billed per request (`queue-worker`) | The queue is kept at every sleep level, so messages wait for the worker. | Covered | `test_ics.test_queue_worker_wires_the_queue_and_keeps_it_while_asleep` |
+| L-15 | Every driver named in the Driver Registry | Implemented, and only those can run. | Covered | `test_drivers.test_every_registered_driver_is_implemented`, `test_unknown_driver_rejected` |
 
 ## Data safety and plan scope
 
@@ -50,6 +57,7 @@ Test references are relative to `services/tests/`.
 | U-07 | All targets become unhealthy while the Environment is awake | Traffic must not reach an unhealthy application. | Gap | An ALB forwards to all targets when none is healthy (fail-open), and DNS is not switched back. A periodic health check in reconciliation that switches DNS to the sleeping page is planned. |
 | U-08 | DNS caches and open connections during Sleep | The application is not removed while clients still reach it. | Partial | DNS switches first, then a fixed 90-second drain precedes removal. Resolver propagation is not measured. |
 | U-09 | Failure in the middle of Sleep or Wake | A safe path to `deep` and to `reclaimed` exists from every intermediate state; the Environment is blocked with a reason. | Covered | RESCUE check; `test_executor.test_stage_failure_blocks_and_skips_rest`, `test_flow.test_execution_error_blocks` |
+| U-10 | A private blueprint (exposure `none`) | No URL, no sleeping page; the public status and wake endpoints answer as for an unknown host. | Covered | `test_flow.test_private_blueprint_has_no_public_url` |
 
 ## Concurrency and drift
 
@@ -84,6 +92,7 @@ Test references are relative to `services/tests/`.
 | K-01 | Compare always-on, stop-only and InfraFlow over the same period | Shown per Lease, including residual charges while asleep (EBS and RDS storage, snapshots). | Covered | `cost.py`; `test_flow.test_full_cycle` |
 | K-02 | Hourly-billed resources | Billed per started hour; an idle environment is not put to sleep before the break-even time. | Covered | `test_desired.test_on_demand_idle_with_break_even` |
 | K-03 | Unit prices | Estimates must be confirmed against the AWS Price List for the region. | Partial | Prices in `cost.py` are estimates for `ap-southeast-1`. |
+| K-04 | Blueprints with different components | Each scenario is priced from the components of the Lease's blueprint. | Covered | `test_ics.TestClassification.test_price_model_follows_the_components`, `test_flow.test_private_blueprint_has_no_public_url` |
 
 ## Registration of existing environments
 

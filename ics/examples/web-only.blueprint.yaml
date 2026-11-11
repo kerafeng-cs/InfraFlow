@@ -1,9 +1,11 @@
 ics_version: "0.1"
 blueprint:
-  name: web-only
+  name: broken-no-db
   version: 1.0.0
   owner: infraflow
   summary: "Negative example: no database, so C1 must reject it"
+  classification:
+    category: web
 parameters:
   size: { type: string, enum: [small, medium], default: small }
 instances:

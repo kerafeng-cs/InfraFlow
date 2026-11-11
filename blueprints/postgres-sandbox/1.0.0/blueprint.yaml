@@ -1,0 +1,24 @@
+ics_version: "0.1"
+blueprint:
+  name: postgres-sandbox
+  version: 1.0.0
+  owner: infraflow
+  summary: "Private PostgreSQL reached through SSM port forwarding, with no application"
+  exposure: none
+  classification:
+    category: data
+    use_cases: ["Analysis or reporting on a copy of production-like data", "Integration tests run from a laptop against a real PostgreSQL"]
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+instances:
+  network:  { component: aws-network-basic@1.0.0 }
+  egress:   { component: aws-nat-egress@1.0.0 }
+  database: { component: aws-rds-postgres@1.0.0, parameters: { size: "${param.size}" } }
+  bastion:  { component: aws-ssm-bastion@1.0.0 }
+bindings:                     # from = requires side, to = provides side
+  - { from: egress.net,     to: network.net }
+  - { from: database.net,   to: network.net }
+  - { from: bastion.net,    to: network.net }
+  - { from: bastion.egress, to: egress.egress }
+  - { from: bastion.db,     to: database.db }
+supported_levels: [awake, deep, hibernate]

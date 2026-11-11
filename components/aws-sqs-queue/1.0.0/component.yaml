@@ -1,0 +1,31 @@
+ics_version: "0.1"
+component:
+  name: aws-sqs-queue
+  version: 1.0.0
+  owner: infraflow
+  summary: "SQS standard queue with a dead-letter queue; messages are kept across sleep"
+  billing_class: free
+  data_class: retained
+  resource_types:
+    - aws_sqs_queue
+  data_resource_types: []
+  primary_resource: aws_sqs_queue.this
+  system_inputs: [name_prefix]
+provides:
+  - port: queue
+    type: queue.sqs/v1
+    attributes: { queue_url: queue_url, queue_arn: queue_arn }
+requires: []
+outputs:
+  queue_url: { stable: true }
+  queue_arn: { stable: true }
+lifecycle:
+  presence_variable: present
+  actions:
+    observe: { driver: sqs.describe }
+  levels: { awake: PRESENT, shallow: PRESENT, deep: PRESENT, hibernate: PRESENT }
+  serving_states: [PRESENT]
+cost:
+  - { meter: sqs_request, in_states: [PRESENT] }   # per request; no charge while idle
+conformance:
+  claimed_level: L2

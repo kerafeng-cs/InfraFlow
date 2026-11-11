@@ -1,5 +1,399 @@
 {
  "blueprints": {
+  "ml-workbench@1.0.0": {
+   "bindings": [
+    {
+     "from": "egress.net",
+     "to": "network.net"
+    },
+    {
+     "from": "volume.net",
+     "to": "network.net"
+    },
+    {
+     "from": "workbench.net",
+     "to": "network.net"
+    },
+    {
+     "from": "workbench.egress",
+     "to": "egress.egress"
+    },
+    {
+     "from": "workbench.volume",
+     "to": "volume.volume"
+    },
+    {
+     "from": "workbench.workload",
+     "to": "sys.lease_app"
+    }
+   ],
+   "blueprint": {
+    "classification": {
+     "category": "ml",
+     "use_cases": [
+      "JupyterLab with a GPU for experiments, stopped outside working hours",
+      "Fine-tuning runs whose datasets and checkpoints must survive sleep"
+     ]
+    },
+    "exposure": "none",
+    "name": "ml-workbench",
+    "owner": "infraflow",
+    "summary": "NVIDIA GPU instance running a notebook or training image, with a persistent data volume",
+    "version": "1.0.0"
+   },
+   "ics_version": "0.1",
+   "instances": {
+    "egress": {
+     "component": "aws-nat-egress@1.0.0"
+    },
+    "network": {
+     "component": "aws-network-basic@1.0.0"
+    },
+    "volume": {
+     "component": "aws-ebs-volume@1.0.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "workbench": {
+     "component": "aws-ec2-gpu-workbench@1.0.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "supported_levels": [
+    "awake",
+    "deep",
+    "hibernate"
+   ]
+  },
+  "postgres-sandbox@1.0.0": {
+   "bindings": [
+    {
+     "from": "egress.net",
+     "to": "network.net"
+    },
+    {
+     "from": "database.net",
+     "to": "network.net"
+    },
+    {
+     "from": "bastion.net",
+     "to": "network.net"
+    },
+    {
+     "from": "bastion.egress",
+     "to": "egress.egress"
+    },
+    {
+     "from": "bastion.db",
+     "to": "database.db"
+    }
+   ],
+   "blueprint": {
+    "classification": {
+     "category": "data",
+     "use_cases": [
+      "Analysis or reporting on a copy of production-like data",
+      "Integration tests run from a laptop against a real PostgreSQL"
+     ]
+    },
+    "exposure": "none",
+    "name": "postgres-sandbox",
+    "owner": "infraflow",
+    "summary": "Private PostgreSQL reached through SSM port forwarding, with no application",
+    "version": "1.0.0"
+   },
+   "ics_version": "0.1",
+   "instances": {
+    "bastion": {
+     "component": "aws-ssm-bastion@1.0.0"
+    },
+    "database": {
+     "component": "aws-rds-postgres@1.0.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "egress": {
+     "component": "aws-nat-egress@1.0.0"
+    },
+    "network": {
+     "component": "aws-network-basic@1.0.0"
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "supported_levels": [
+    "awake",
+    "deep",
+    "hibernate"
+   ]
+  },
+  "queue-worker@1.0.0": {
+   "bindings": [
+    {
+     "from": "egress.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.egress",
+     "to": "egress.egress"
+    },
+    {
+     "from": "app.queue",
+     "to": "queue.queue"
+    },
+    {
+     "from": "app.workload",
+     "to": "sys.lease_app"
+    }
+   ],
+   "blueprint": {
+    "classification": {
+     "category": "worker",
+     "use_cases": [
+      "Job processors that may run only during working hours",
+      "Testing producers and consumers of an event pipeline"
+     ]
+    },
+    "exposure": "none",
+    "name": "queue-worker",
+    "owner": "infraflow",
+    "summary": "Background worker (Docker on EC2) consuming an SQS queue whose messages wait while it sleeps",
+    "version": "1.0.0"
+   },
+   "ics_version": "0.1",
+   "instances": {
+    "app": {
+     "component": "aws-ec2-docker-app@1.1.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "egress": {
+     "component": "aws-nat-egress@1.0.0"
+    },
+    "network": {
+     "component": "aws-network-basic@1.0.0"
+    },
+    "queue": {
+     "component": "aws-sqs-queue@1.0.0"
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "supported_levels": [
+    "awake",
+    "deep",
+    "hibernate"
+   ]
+  },
+  "search-sandbox@1.0.0": {
+   "bindings": [
+    {
+     "from": "egress.net",
+     "to": "network.net"
+    },
+    {
+     "from": "search.net",
+     "to": "network.net"
+    },
+    {
+     "from": "bastion.net",
+     "to": "network.net"
+    },
+    {
+     "from": "bastion.egress",
+     "to": "egress.egress"
+    }
+   ],
+   "blueprint": {
+    "classification": {
+     "category": "data",
+     "use_cases": [
+      "Trying index mappings and queries before changing production",
+      "Search relevance experiments on a reindexable dataset"
+     ]
+    },
+    "exposure": "none",
+    "name": "search-sandbox",
+    "owner": "infraflow",
+    "summary": "Private OpenSearch domain reached through SSM port forwarding; reindexed after each wake",
+    "version": "1.0.0"
+   },
+   "ics_version": "0.1",
+   "instances": {
+    "bastion": {
+     "component": "aws-ssm-bastion@1.0.0"
+    },
+    "egress": {
+     "component": "aws-nat-egress@1.0.0"
+    },
+    "network": {
+     "component": "aws-network-basic@1.0.0"
+    },
+    "search": {
+     "component": "aws-opensearch-domain@1.0.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "supported_levels": [
+    "awake",
+    "deep",
+    "hibernate"
+   ]
+  },
+  "web-db-cache@1.0.0": {
+   "bindings": [
+    {
+     "from": "egress.net",
+     "to": "network.net"
+    },
+    {
+     "from": "database.net",
+     "to": "network.net"
+    },
+    {
+     "from": "cache.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.egress",
+     "to": "egress.egress"
+    },
+    {
+     "from": "app.db",
+     "to": "database.db"
+    },
+    {
+     "from": "app.cache",
+     "to": "cache.cache"
+    },
+    {
+     "from": "app.workload",
+     "to": "sys.lease_app"
+    },
+    {
+     "from": "entry.net",
+     "to": "network.net"
+    },
+    {
+     "from": "entry.backend",
+     "to": "app.http"
+    },
+    {
+     "from": "sys.dns",
+     "to": "entry.public"
+    }
+   ],
+   "blueprint": {
+    "classification": {
+     "category": "web",
+     "use_cases": [
+      "Staging for an application that uses Redis for sessions or caching",
+      "Load and regression testing with a warm-up phase after wake"
+     ]
+    },
+    "exposure": "public",
+    "name": "web-db-cache",
+    "owner": "infraflow",
+    "summary": "Web application with PostgreSQL and a Redis cache behind an ALB",
+    "version": "1.0.0"
+   },
+   "ics_version": "0.1",
+   "instances": {
+    "app": {
+     "component": "aws-ec2-docker-app@1.1.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "cache": {
+     "component": "aws-elasticache-redis@1.0.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "database": {
+     "component": "aws-rds-postgres@1.0.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "egress": {
+     "component": "aws-nat-egress@1.0.0"
+    },
+    "entry": {
+     "component": "aws-alb-https-entry@1.0.0"
+    },
+    "network": {
+     "component": "aws-network-basic@1.0.0"
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "supported_levels": [
+    "awake",
+    "deep",
+    "hibernate"
+   ]
+  },
   "web-db@1.0.0": {
    "bindings": [
     {
@@ -40,6 +434,14 @@
     }
    ],
    "blueprint": {
+    "classification": {
+     "category": "web",
+     "use_cases": [
+      "Staging or QA for a web application with a relational database",
+      "Customer demos that must keep their data between sessions"
+     ]
+    },
+    "exposure": "public",
     "name": "web-db",
     "owner": "infraflow",
     "summary": "Web application (Docker on EC2) with PostgreSQL behind an ALB",
@@ -64,6 +466,324 @@
     },
     "entry": {
      "component": "aws-alb-https-entry@1.0.0"
+    },
+    "network": {
+     "component": "aws-network-basic@1.0.0"
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "supported_levels": [
+    "awake",
+    "deep",
+    "hibernate"
+   ]
+  },
+  "web-ecs@1.0.0": {
+   "bindings": [
+    {
+     "from": "egress.net",
+     "to": "network.net"
+    },
+    {
+     "from": "entry.net",
+     "to": "network.net"
+    },
+    {
+     "from": "entry.workload",
+     "to": "sys.lease_app"
+    },
+    {
+     "from": "service.net",
+     "to": "network.net"
+    },
+    {
+     "from": "service.egress",
+     "to": "egress.egress"
+    },
+    {
+     "from": "service.target",
+     "to": "entry.target"
+    },
+    {
+     "from": "service.workload",
+     "to": "sys.lease_app"
+    },
+    {
+     "from": "sys.dns",
+     "to": "entry.public"
+    }
+   ],
+   "blueprint": {
+    "classification": {
+     "category": "web",
+     "use_cases": [
+      "Preview of a containerized service that runs on ECS in production",
+      "Stateless API or frontend without servers to manage"
+     ]
+    },
+    "exposure": "public",
+    "name": "web-ecs",
+    "owner": "infraflow",
+    "summary": "Web application on ECS Fargate behind an ALB, without a database",
+    "version": "1.0.0"
+   },
+   "ics_version": "0.1",
+   "instances": {
+    "egress": {
+     "component": "aws-nat-egress@1.0.0"
+    },
+    "entry": {
+     "component": "aws-alb-ip-entry@1.0.0"
+    },
+    "network": {
+     "component": "aws-network-basic@1.0.0"
+    },
+    "service": {
+     "component": "aws-ecs-fargate-service@1.0.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "supported_levels": [
+    "awake",
+    "deep",
+    "hibernate"
+   ]
+  },
+  "web-only@1.0.0": {
+   "bindings": [
+    {
+     "from": "egress.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.egress",
+     "to": "egress.egress"
+    },
+    {
+     "from": "app.workload",
+     "to": "sys.lease_app"
+    },
+    {
+     "from": "entry.net",
+     "to": "network.net"
+    },
+    {
+     "from": "entry.backend",
+     "to": "app.http"
+    },
+    {
+     "from": "sys.dns",
+     "to": "entry.public"
+    }
+   ],
+   "blueprint": {
+    "classification": {
+     "category": "web",
+     "use_cases": [
+      "Frontend or API preview that keeps no data of its own",
+      "Demo of a service that calls external APIs only"
+     ]
+    },
+    "exposure": "public",
+    "name": "web-only",
+    "owner": "infraflow",
+    "summary": "Stateless web application (Docker on EC2) behind an ALB, without a database",
+    "version": "1.0.0"
+   },
+   "ics_version": "0.1",
+   "instances": {
+    "app": {
+     "component": "aws-ec2-docker-app@1.1.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "egress": {
+     "component": "aws-nat-egress@1.0.0"
+    },
+    "entry": {
+     "component": "aws-alb-https-entry@1.0.0"
+    },
+    "network": {
+     "component": "aws-network-basic@1.0.0"
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "supported_levels": [
+    "awake",
+    "deep",
+    "hibernate"
+   ]
+  },
+  "worker-cache@1.0.0": {
+   "bindings": [
+    {
+     "from": "egress.net",
+     "to": "network.net"
+    },
+    {
+     "from": "cache.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.egress",
+     "to": "egress.egress"
+    },
+    {
+     "from": "app.cache",
+     "to": "cache.cache"
+    },
+    {
+     "from": "app.workload",
+     "to": "sys.lease_app"
+    }
+   ],
+   "blueprint": {
+    "classification": {
+     "category": "worker",
+     "use_cases": [
+      "Queue consumers whose jobs may be discarded on sleep",
+      "Load generators and test runners that coordinate through Redis"
+     ]
+    },
+    "exposure": "none",
+    "name": "worker-cache",
+    "owner": "infraflow",
+    "summary": "Background worker (Docker on EC2) with a Redis queue and no public URL",
+    "version": "1.0.0"
+   },
+   "ics_version": "0.1",
+   "instances": {
+    "app": {
+     "component": "aws-ec2-docker-app@1.1.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "cache": {
+     "component": "aws-elasticache-redis@1.0.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "egress": {
+     "component": "aws-nat-egress@1.0.0"
+    },
+    "network": {
+     "component": "aws-network-basic@1.0.0"
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "supported_levels": [
+    "awake",
+    "deep",
+    "hibernate"
+   ]
+  },
+  "worker-db@1.0.0": {
+   "bindings": [
+    {
+     "from": "egress.net",
+     "to": "network.net"
+    },
+    {
+     "from": "database.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.net",
+     "to": "network.net"
+    },
+    {
+     "from": "app.egress",
+     "to": "egress.egress"
+    },
+    {
+     "from": "app.db",
+     "to": "database.db"
+    },
+    {
+     "from": "app.workload",
+     "to": "sys.lease_app"
+    }
+   ],
+   "blueprint": {
+    "classification": {
+     "category": "worker",
+     "use_cases": [
+      "Scheduled batch or ETL jobs that run during working hours",
+      "Queue consumers and integration test runners"
+     ]
+    },
+    "exposure": "none",
+    "name": "worker-db",
+    "owner": "infraflow",
+    "summary": "Background worker (Docker on EC2) with PostgreSQL and no public URL",
+    "version": "1.0.0"
+   },
+   "ics_version": "0.1",
+   "instances": {
+    "app": {
+     "component": "aws-ec2-docker-app@1.1.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "database": {
+     "component": "aws-rds-postgres@1.0.0",
+     "parameters": {
+      "size": "${param.size}"
+     }
+    },
+    "egress": {
+     "component": "aws-nat-egress@1.0.0"
     },
     "network": {
      "component": "aws-network-basic@1.0.0"
@@ -196,6 +916,231 @@
      "port": "backend",
      "type": "http.backend/v1",
      "when": "serving"
+    }
+   ]
+  },
+  "aws-alb-ip-entry@1.0.0": {
+   "_dir": "components/aws-alb-ip-entry/1.0.0",
+   "component": {
+    "billing_class": "hourly_no_data",
+    "data_class": "none",
+    "data_resource_types": [],
+    "name": "aws-alb-ip-entry",
+    "owner": "infraflow",
+    "primary_resource": "aws_lb.this",
+    "resource_types": [
+     "aws_lb",
+     "aws_lb_target_group",
+     "aws_lb_listener",
+     "aws_security_group",
+     "aws_vpc_security_group_ingress_rule",
+     "aws_vpc_security_group_egress_rule"
+    ],
+    "summary": "Public ALB with an IP target group that a container service registers its tasks into",
+    "system_inputs": [
+     "name_prefix",
+     "certificate_arn"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L2"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "PRESENT"
+     ],
+     "meter": "alb_hour"
+    },
+    {
+     "count": 2,
+     "in_states": [
+      "PRESENT"
+     ],
+     "meter": "public_ipv4_hour"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "elbv2.target_healthy",
+     "timeout_s": 900
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "elbv2.describe"
+     }
+    },
+    "levels": {
+     "awake": "PRESENT",
+     "deep": "ABSENT",
+     "hibernate": "ABSENT",
+     "shallow": "PRESENT"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "PRESENT"
+    ]
+   },
+   "outputs": {
+    "dns_name": {
+     "stable": false
+    },
+    "security_group_id": {
+     "stable": false
+    },
+    "target_group_arn": {
+     "stable": false
+    },
+    "zone_id": {
+     "stable": true
+    }
+   },
+   "parameters": {},
+   "provides": [
+    {
+     "attributes": {
+      "dns_name": "dns_name",
+      "zone_id": "zone_id"
+     },
+     "port": "public",
+     "type": "http.public/v1"
+    },
+    {
+     "attributes": {
+      "security_group_id": "security_group_id",
+      "target_group_arn": "target_group_arn"
+     },
+     "port": "target",
+     "type": "lb.target/v1"
+    }
+   ],
+   "requires": [
+    {
+     "inputs": {
+      "public_subnet_ids": "public_subnet_ids",
+      "vpc_id": "vpc_id"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
+     "when": "present"
+    },
+    {
+     "inputs": {
+      "health_path": "health_path",
+      "port": "target_port"
+     },
+     "port": "workload",
+     "type": "workload.container/v1",
+     "when": "present"
+    }
+   ]
+  },
+  "aws-ebs-volume@1.0.0": {
+   "_dir": "components/aws-ebs-volume/1.0.0",
+   "component": {
+    "billing_class": "data",
+    "data_class": "persistent",
+    "data_resource_types": [
+     "aws_ebs_volume"
+    ],
+    "name": "aws-ebs-volume",
+    "owner": "infraflow",
+    "primary_resource": "aws_ebs_volume.this",
+    "resource_types": [
+     "aws_ebs_volume"
+    ],
+    "summary": "Encrypted gp3 data volume; snapshotted before hibernation and restored on wake",
+    "system_inputs": [
+     "name_prefix"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L3"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "RUNNING"
+     ],
+     "meter": "ebs_gb_month",
+     "param": "size"
+    },
+    {
+     "in_states": [
+      "SNAPSHOTTED"
+     ],
+     "meter": "snapshot_gb_month"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "terraform.presence",
+     "timeout_s": 300
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "ebs_volume.describe"
+     },
+     "snapshot": {
+      "driver": "ebs_volume.snapshot"
+     }
+    },
+    "levels": {
+     "awake": "RUNNING",
+     "deep": "RUNNING",
+     "hibernate": "SNAPSHOTTED",
+     "shallow": "RUNNING"
+    },
+    "presence_variable": "present",
+    "restore_variable": "restore_from_snapshot",
+    "serving_states": [
+     "RUNNING"
+    ]
+   },
+   "outputs": {
+    "availability_zone": {
+     "stable": true
+    },
+    "volume_id": {
+     "stable": true
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "provides": [
+    {
+     "attributes": {
+      "availability_zone": "availability_zone",
+      "volume_id": "volume_id"
+     },
+     "port": "volume",
+     "type": "storage.ebs/v1"
+    }
+   ],
+   "requires": [
+    {
+     "inputs": {
+      "private_subnet_ids": "subnet_ids"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
+     "when": "present"
     }
    ]
   },
@@ -347,6 +1292,536 @@
      },
      "port": "workload",
      "type": "workload.container/v1",
+     "when": "present"
+    }
+   ]
+  },
+  "aws-ec2-docker-app@1.1.0": {
+   "_dir": "components/aws-ec2-docker-app/1.1.0",
+   "component": {
+    "billing_class": "stoppable",
+    "data_class": "none",
+    "data_resource_types": [],
+    "name": "aws-ec2-docker-app",
+    "owner": "infraflow",
+    "primary_resource": "aws_instance.app",
+    "resource_types": [
+     "aws_instance",
+     "aws_security_group",
+     "aws_vpc_security_group_egress_rule",
+     "aws_vpc_security_group_ingress_rule",
+     "aws_iam_role",
+     "aws_iam_role_policy",
+     "aws_iam_role_policy_attachment",
+     "aws_iam_instance_profile"
+    ],
+    "summary": "Amazon Linux 2023 EC2 instance in a private subnet running one Docker image",
+    "system_inputs": [
+     "name_prefix",
+     "env_id"
+    ],
+    "version": "1.1.0"
+   },
+   "conformance": {
+    "claimed_level": "L2"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "RUNNING"
+     ],
+     "meter": "ec2_instance_hour",
+     "param": "size"
+    },
+    {
+     "in_states": [
+      "RUNNING",
+      "STOPPED"
+     ],
+     "meter": "ebs_gb_month",
+     "param": "root_volume_gb"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "ec2_instance.status_ok",
+     "timeout_s": 600
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "ec2_instance.describe"
+     },
+     "start": {
+      "driver": "ec2_instance.start"
+     },
+     "stop": {
+      "driver": "ec2_instance.stop"
+     }
+    },
+    "levels": {
+     "awake": "RUNNING",
+     "deep": "STOPPED",
+     "hibernate": "ABSENT",
+     "shallow": "STOPPED"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "RUNNING"
+    ]
+   },
+   "outputs": {
+    "health_path": {
+     "stable": true
+    },
+    "instance_id": {
+     "stable": true
+    },
+    "port": {
+     "stable": true
+    },
+    "security_group_id": {
+     "stable": true
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "provides": [
+    {
+     "attributes": {
+      "health_path": "health_path",
+      "instance_id": "instance_id",
+      "port": "port",
+      "security_group_id": "security_group_id"
+     },
+     "port": "http",
+     "type": "http.backend/v1"
+    }
+   ],
+   "requires": [
+    {
+     "inputs": {
+      "private_subnet_ids": "subnet_ids",
+      "vpc_id": "vpc_id"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
+     "when": "present"
+    },
+    {
+     "port": "egress",
+     "type": "net.egress/v1",
+     "when": "serving"
+    },
+    {
+     "enabled_variable": "db_enabled",
+     "inputs": {
+      "host": "db_host",
+      "name": "db_name",
+      "password_param": "db_password_param",
+      "port": "db_port",
+      "security_group_id": "db_security_group_id",
+      "user": "db_user"
+     },
+     "optional": true,
+     "port": "db",
+     "type": "db.postgres/v1",
+     "when": "serving"
+    },
+    {
+     "enabled_variable": "cache_enabled",
+     "optional": true,
+     "port": "cache",
+     "type": "cache.redis/v1",
+     "when": "serving"
+    },
+    {
+     "enabled_variable": "queue_enabled",
+     "inputs": {
+      "queue_arn": "queue_arn",
+      "queue_url": "queue_url"
+     },
+     "optional": true,
+     "port": "queue",
+     "type": "queue.sqs/v1",
+     "when": "serving"
+    },
+    {
+     "inputs": {
+      "health_path": "app_health_path",
+      "image": "app_image",
+      "port": "app_port"
+     },
+     "port": "workload",
+     "type": "workload.container/v1",
+     "when": "present"
+    }
+   ]
+  },
+  "aws-ec2-gpu-workbench@1.0.0": {
+   "_dir": "components/aws-ec2-gpu-workbench/1.0.0",
+   "component": {
+    "billing_class": "stoppable",
+    "data_class": "none",
+    "data_resource_types": [],
+    "name": "aws-ec2-gpu-workbench",
+    "owner": "infraflow",
+    "primary_resource": "aws_instance.workbench",
+    "resource_types": [
+     "aws_instance",
+     "aws_volume_attachment",
+     "aws_security_group",
+     "aws_vpc_security_group_egress_rule",
+     "aws_iam_role",
+     "aws_iam_role_policy_attachment",
+     "aws_iam_instance_profile"
+    ],
+    "summary": "NVIDIA GPU instance (Deep Learning AMI) running one container with a data volume at /data",
+    "system_inputs": [
+     "name_prefix",
+     "env_id"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L2"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "RUNNING"
+     ],
+     "meter": "ec2_instance_hour",
+     "param": "size"
+    },
+    {
+     "in_states": [
+      "RUNNING",
+      "STOPPED"
+     ],
+     "meter": "ebs_gb_month"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "ec2_workbench.status_ok",
+     "timeout_s": 900
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "ec2_workbench.describe"
+     },
+     "start": {
+      "driver": "ec2_workbench.start"
+     },
+     "stop": {
+      "driver": "ec2_workbench.stop"
+     }
+    },
+    "levels": {
+     "awake": "RUNNING",
+     "deep": "STOPPED",
+     "hibernate": "ABSENT",
+     "shallow": "STOPPED"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "RUNNING"
+    ]
+   },
+   "outputs": {
+    "instance_id": {
+     "stable": true
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "provides": [],
+   "requires": [
+    {
+     "inputs": {
+      "private_subnet_ids": "subnet_ids",
+      "vpc_id": "vpc_id"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
+     "when": "present"
+    },
+    {
+     "port": "egress",
+     "type": "net.egress/v1",
+     "when": "serving"
+    },
+    {
+     "inputs": {
+      "availability_zone": "volume_availability_zone",
+      "volume_id": "volume_id"
+     },
+     "port": "volume",
+     "type": "storage.ebs/v1",
+     "when": "present"
+    },
+    {
+     "inputs": {
+      "image": "app_image",
+      "port": "app_port"
+     },
+     "port": "workload",
+     "type": "workload.container/v1",
+     "when": "present"
+    }
+   ]
+  },
+  "aws-ecs-fargate-service@1.0.0": {
+   "_dir": "components/aws-ecs-fargate-service/1.0.0",
+   "component": {
+    "billing_class": "stoppable",
+    "data_class": "none",
+    "data_resource_types": [],
+    "name": "aws-ecs-fargate-service",
+    "owner": "infraflow",
+    "primary_resource": "aws_ecs_service.this",
+    "resource_types": [
+     "aws_ecs_cluster",
+     "aws_ecs_task_definition",
+     "aws_ecs_service",
+     "aws_cloudwatch_log_group",
+     "aws_security_group",
+     "aws_vpc_security_group_ingress_rule",
+     "aws_vpc_security_group_egress_rule",
+     "aws_iam_role",
+     "aws_iam_role_policy_attachment"
+    ],
+    "summary": "One Docker image as an ECS service on Fargate, registered into an ALB target group",
+    "system_inputs": [
+     "name_prefix",
+     "env_id"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L2"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "RUNNING"
+     ],
+     "meter": "fargate_vcpu_hour",
+     "param": "size"
+    },
+    {
+     "in_states": [
+      "RUNNING"
+     ],
+     "meter": "fargate_gb_hour",
+     "param": "size"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "elbv2.target_healthy",
+     "timeout_s": 900
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "ecs_service.describe"
+     },
+     "start": {
+      "driver": "ecs_service.start"
+     },
+     "stop": {
+      "driver": "ecs_service.stop"
+     }
+    },
+    "levels": {
+     "awake": "RUNNING",
+     "deep": "ABSENT",
+     "hibernate": "ABSENT",
+     "shallow": "STOPPED"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "RUNNING"
+    ]
+   },
+   "outputs": {
+    "cluster_name": {
+     "stable": true
+    },
+    "service_name": {
+     "stable": true
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "provides": [],
+   "requires": [
+    {
+     "inputs": {
+      "private_subnet_ids": "subnet_ids",
+      "vpc_id": "vpc_id"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
+     "when": "present"
+    },
+    {
+     "port": "egress",
+     "type": "net.egress/v1",
+     "when": "serving"
+    },
+    {
+     "inputs": {
+      "security_group_id": "alb_security_group_id",
+      "target_group_arn": "target_group_arn"
+     },
+     "port": "target",
+     "type": "lb.target/v1",
+     "when": "present"
+    },
+    {
+     "inputs": {
+      "image": "app_image",
+      "port": "app_port"
+     },
+     "port": "workload",
+     "type": "workload.container/v1",
+     "when": "present"
+    }
+   ]
+  },
+  "aws-elasticache-redis@1.0.0": {
+   "_dir": "components/aws-elasticache-redis/1.0.0",
+   "component": {
+    "billing_class": "hourly_no_data",
+    "data_class": "ephemeral",
+    "data_resource_types": [],
+    "name": "aws-elasticache-redis",
+    "owner": "infraflow",
+    "primary_resource": "aws_elasticache_cluster.this",
+    "resource_types": [
+     "aws_elasticache_cluster",
+     "aws_elasticache_subnet_group",
+     "aws_security_group",
+     "aws_vpc_security_group_ingress_rule",
+     "aws_ssm_parameter"
+    ],
+    "summary": "Single-node Redis 7 on ElastiCache; contents are lost on sleep",
+    "system_inputs": [
+     "name_prefix",
+     "env_id"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L1"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "PRESENT"
+     ],
+     "meter": "elasticache_node_hour",
+     "param": "size"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "terraform.presence",
+     "timeout_s": 900
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "elasticache.describe"
+     }
+    },
+    "levels": {
+     "awake": "PRESENT",
+     "deep": "ABSENT",
+     "hibernate": "ABSENT",
+     "shallow": "PRESENT"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "PRESENT"
+    ]
+   },
+   "outputs": {
+    "host": {
+     "stable": false
+    },
+    "port": {
+     "stable": true
+    },
+    "security_group_id": {
+     "stable": false
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "provides": [
+    {
+     "attributes": {
+      "host": "host",
+      "port": "port",
+      "security_group_id": "security_group_id"
+     },
+     "port": "cache",
+     "type": "cache.redis/v1"
+    }
+   ],
+   "requires": [
+    {
+     "inputs": {
+      "private_subnet_ids": "subnet_ids",
+      "vpc_id": "vpc_id"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
      "when": "present"
     }
    ]
@@ -513,6 +1988,110 @@
    ],
    "requires": []
   },
+  "aws-opensearch-domain@1.0.0": {
+   "_dir": "components/aws-opensearch-domain/1.0.0",
+   "component": {
+    "billing_class": "hourly_no_data",
+    "data_class": "ephemeral",
+    "data_resource_types": [],
+    "name": "aws-opensearch-domain",
+    "owner": "infraflow",
+    "primary_resource": "aws_opensearch_domain.this",
+    "resource_types": [
+     "aws_opensearch_domain",
+     "aws_security_group",
+     "aws_vpc_security_group_ingress_rule",
+     "aws_ssm_parameter"
+    ],
+    "summary": "Single-node OpenSearch domain in a private subnet; the index is rebuilt after each wake",
+    "system_inputs": [
+     "name_prefix",
+     "env_id"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L1"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "PRESENT"
+     ],
+     "meter": "opensearch_instance_hour",
+     "param": "size"
+    },
+    {
+     "in_states": [
+      "PRESENT"
+     ],
+     "meter": "ebs_gb_month"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "terraform.presence",
+     "timeout_s": 1800
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "opensearch.describe"
+     }
+    },
+    "levels": {
+     "awake": "PRESENT",
+     "deep": "ABSENT",
+     "hibernate": "ABSENT",
+     "shallow": "PRESENT"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "PRESENT"
+    ]
+   },
+   "outputs": {
+    "endpoint": {
+     "stable": false
+    },
+    "security_group_id": {
+     "stable": false
+    }
+   },
+   "parameters": {
+    "size": {
+     "default": "small",
+     "enum": [
+      "small",
+      "medium"
+     ],
+     "type": "string"
+    }
+   },
+   "provides": [
+    {
+     "attributes": {
+      "endpoint": "endpoint",
+      "security_group_id": "security_group_id"
+     },
+     "port": "search",
+     "type": "search.opensearch/v1"
+    }
+   ],
+   "requires": [
+    {
+     "inputs": {
+      "private_subnet_ids": "subnet_ids",
+      "vpc_id": "vpc_id"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
+     "when": "present"
+    }
+   ]
+  },
   "aws-rds-postgres@1.0.0": {
    "_dir": "components/aws-rds-postgres/1.0.0",
    "component": {
@@ -658,9 +2237,189 @@
      "when": "present"
     }
    ]
+  },
+  "aws-sqs-queue@1.0.0": {
+   "_dir": "components/aws-sqs-queue/1.0.0",
+   "component": {
+    "billing_class": "free",
+    "data_class": "retained",
+    "data_resource_types": [],
+    "name": "aws-sqs-queue",
+    "owner": "infraflow",
+    "primary_resource": "aws_sqs_queue.this",
+    "resource_types": [
+     "aws_sqs_queue"
+    ],
+    "summary": "SQS standard queue with a dead-letter queue; messages are kept across sleep",
+    "system_inputs": [
+     "name_prefix"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L2"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "PRESENT"
+     ],
+     "meter": "sqs_request"
+    }
+   ],
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "sqs.describe"
+     }
+    },
+    "levels": {
+     "awake": "PRESENT",
+     "deep": "PRESENT",
+     "hibernate": "PRESENT",
+     "shallow": "PRESENT"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "PRESENT"
+    ]
+   },
+   "outputs": {
+    "queue_arn": {
+     "stable": true
+    },
+    "queue_url": {
+     "stable": true
+    }
+   },
+   "provides": [
+    {
+     "attributes": {
+      "queue_arn": "queue_arn",
+      "queue_url": "queue_url"
+     },
+     "port": "queue",
+     "type": "queue.sqs/v1"
+    }
+   ],
+   "requires": []
+  },
+  "aws-ssm-bastion@1.0.0": {
+   "_dir": "components/aws-ssm-bastion/1.0.0",
+   "component": {
+    "billing_class": "stoppable",
+    "data_class": "none",
+    "data_resource_types": [],
+    "name": "aws-ssm-bastion",
+    "owner": "infraflow",
+    "primary_resource": "aws_instance.bastion",
+    "resource_types": [
+     "aws_instance",
+     "aws_security_group",
+     "aws_vpc_security_group_egress_rule",
+     "aws_vpc_security_group_ingress_rule",
+     "aws_iam_role",
+     "aws_iam_role_policy_attachment",
+     "aws_iam_instance_profile"
+    ],
+    "summary": "Small EC2 instance in a private subnet for SSM port forwarding to private services",
+    "system_inputs": [
+     "name_prefix"
+    ],
+    "version": "1.0.0"
+   },
+   "conformance": {
+    "claimed_level": "L2"
+   },
+   "cost": [
+    {
+     "in_states": [
+      "RUNNING"
+     ],
+     "meter": "ec2_instance_hour"
+    },
+    {
+     "in_states": [
+      "RUNNING",
+      "STOPPED"
+     ],
+     "meter": "ebs_gb_month"
+    }
+   ],
+   "health": {
+    "probe": {
+     "driver": "ec2_bastion.status_ok",
+     "timeout_s": 600
+    }
+   },
+   "ics_version": "0.1",
+   "lifecycle": {
+    "actions": {
+     "observe": {
+      "driver": "ec2_bastion.describe"
+     },
+     "start": {
+      "driver": "ec2_bastion.start"
+     },
+     "stop": {
+      "driver": "ec2_bastion.stop"
+     }
+    },
+    "levels": {
+     "awake": "RUNNING",
+     "deep": "STOPPED",
+     "hibernate": "ABSENT",
+     "shallow": "STOPPED"
+    },
+    "presence_variable": "present",
+    "serving_states": [
+     "RUNNING"
+    ]
+   },
+   "outputs": {
+    "instance_id": {
+     "stable": true
+    }
+   },
+   "parameters": {},
+   "provides": [],
+   "requires": [
+    {
+     "inputs": {
+      "private_subnet_ids": "subnet_ids",
+      "vpc_id": "vpc_id"
+     },
+     "port": "net",
+     "type": "net.vpc/v1",
+     "when": "present"
+    },
+    {
+     "port": "egress",
+     "type": "net.egress/v1",
+     "when": "serving"
+    },
+    {
+     "enabled_variable": "db_enabled",
+     "inputs": {
+      "port": "db_port",
+      "security_group_id": "db_security_group_id"
+     },
+     "optional": true,
+     "port": "db",
+     "type": "db.postgres/v1",
+     "when": "serving"
+    }
+   ]
   }
  },
  "registry": {
+  "categories": {
+   "data": "Data service for analysis or integration testing",
+   "ml": "Machine learning workstation or training job",
+   "web": "Web application or API reachable through a public URL",
+   "worker": "Background processing without a public URL"
+  },
   "classes": {
    "data": {
     "initial": "RUNNING",
@@ -694,6 +2453,12 @@
     ]
    }
   },
+  "data_classes": [
+   "none",
+   "persistent",
+   "retained",
+   "ephemeral"
+  ],
   "drivers": [
    "vpc.describe",
    "nat_gateway.describe",
@@ -707,6 +2472,22 @@
    "rds_instance.snapshot",
    "rds_instance.available",
    "elbv2.describe",
+   "elasticache.describe",
+   "ec2_bastion.describe",
+   "ec2_bastion.start",
+   "ec2_bastion.stop",
+   "ec2_bastion.status_ok",
+   "ec2_workbench.describe",
+   "ec2_workbench.start",
+   "ec2_workbench.stop",
+   "ec2_workbench.status_ok",
+   "ebs_volume.describe",
+   "ebs_volume.snapshot",
+   "ecs_service.describe",
+   "ecs_service.start",
+   "ecs_service.stop",
+   "sqs.describe",
+   "opensearch.describe",
    "elbv2.target_healthy",
    "dns.point",
    "wait.seconds",
@@ -715,6 +2496,11 @@
   ],
   "ics_version": "0.1",
   "port_types": {
+   "cache.redis/v1": [
+    "host",
+    "port",
+    "security_group_id"
+   ],
    "db.postgres/v1": [
     "host",
     "port",
@@ -733,6 +2519,10 @@
     "dns_name",
     "zone_id"
    ],
+   "lb.target/v1": [
+    "target_group_arn",
+    "security_group_id"
+   ],
    "net.egress/v1": [
     "nat_gateway_id"
    ],
@@ -742,6 +2532,18 @@
     "private_subnet_ids",
     "private_route_table_id"
    ],
+   "queue.sqs/v1": [
+    "queue_url",
+    "queue_arn"
+   ],
+   "search.opensearch/v1": [
+    "endpoint",
+    "security_group_id"
+   ],
+   "storage.ebs/v1": [
+    "volume_id",
+    "availability_zone"
+   ],
    "workload.container/v1": [
     "image",
     "port",
@@ -749,6 +2551,9 @@
    ]
   },
   "resource_types": {
+   "aws_cloudwatch_log_group": {
+    "class": null
+   },
    "aws_db_instance": {
     "class": "data",
     "data": true
@@ -760,8 +2565,24 @@
     "class": "data",
     "data": true
    },
+   "aws_ecs_cluster": {
+    "class": null
+   },
+   "aws_ecs_service": {
+    "class": "stoppable"
+   },
+   "aws_ecs_task_definition": {
+    "class": null
+   },
    "aws_eip": {
     "class": "hourly_no_data"
+   },
+   "aws_elasticache_cluster": {
+    "class": "hourly_no_data",
+    "volatile": true
+   },
+   "aws_elasticache_subnet_group": {
+    "class": null
    },
    "aws_iam_instance_profile": {
     "class": null
@@ -796,6 +2617,10 @@
    "aws_nat_gateway": {
     "class": "hourly_no_data"
    },
+   "aws_opensearch_domain": {
+    "class": "hourly_no_data",
+    "volatile": true
+   },
    "aws_route": {
     "class": null
    },
@@ -808,11 +2633,17 @@
    "aws_security_group": {
     "class": null
    },
+   "aws_sqs_queue": {
+    "class": "free"
+   },
    "aws_ssm_parameter": {
     "class": null
    },
    "aws_subnet": {
     "class": "free"
+   },
+   "aws_volume_attachment": {
+    "class": null
    },
    "aws_vpc": {
     "class": "free"

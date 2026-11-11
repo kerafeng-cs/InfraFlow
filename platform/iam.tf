@@ -52,8 +52,9 @@ resource "aws_iam_role_policy" "ops" {
       {
         Effect = "Allow"
         Action = ["ec2:DescribeVpcs", "ec2:DescribeNatGateways", "ec2:DescribeInstances", "ec2:DescribeInstanceStatus",
-          "rds:DescribeDBInstances", "rds:DescribeDBSnapshots", "elasticloadbalancing:Describe*",
-        "tag:GetResources", "cloudwatch:GetMetricStatistics"]
+          "ec2:DescribeVolumes", "ec2:DescribeSnapshots", "rds:DescribeDBInstances", "rds:DescribeDBSnapshots",
+          "elasticloadbalancing:Describe*", "elasticache:DescribeCacheClusters", "ecs:DescribeServices", "sqs:GetQueueUrl",
+        "es:DescribeDomain", "tag:GetResources", "cloudwatch:GetMetricStatistics"]
         Resource = "*"
       },
       # Start, stop and snapshot only resources managed by InfraFlow
@@ -70,6 +71,25 @@ resource "aws_iam_role_policy" "ops" {
         Condition = { StringEquals = { "aws:ResourceTag/infraflow:managed" = "true" } }
       },
       { Effect = "Allow", Action = ["rds:CreateDBSnapshot", "rds:AddTagsToResource"], Resource = "arn:aws:rds:${local.region}:${local.account}:snapshot:*" },
+      {
+        Effect    = "Allow"
+        Action    = ["ec2:CreateSnapshot"]
+        Resource  = "arn:aws:ec2:${local.region}:${local.account}:volume/*"
+        Condition = { StringEquals = { "aws:ResourceTag/infraflow:managed" = "true" } }
+      },
+      { Effect = "Allow", Action = ["ec2:CreateSnapshot"], Resource = "arn:aws:ec2:${local.region}::snapshot/*" },
+      {
+        Effect    = "Allow"
+        Action    = ["ec2:CreateTags"]
+        Resource  = "arn:aws:ec2:${local.region}::snapshot/*"
+        Condition = { StringEquals = { "ec2:CreateAction" = "CreateSnapshot" } }
+      },
+      {
+        Effect    = "Allow"
+        Action    = ["ecs:UpdateService"]
+        Resource  = "*"
+        Condition = { StringEquals = { "aws:ResourceTag/infraflow:managed" = "true" } }
+      },
       ], var.hosted_zone_id == null ? [] : [
       { Effect = "Allow", Action = ["route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets"], Resource = "arn:aws:route53:::hostedzone/${var.hosted_zone_id}" },
     ])
@@ -121,7 +141,7 @@ resource "aws_iam_role_policy" "codebuild" {
       # Resource types from the Resource Type Registry (ics/registry.yaml), limited to the region
       {
         Effect    = "Allow"
-        Action    = ["ec2:*", "elasticloadbalancing:*", "rds:*", "ssm:GetParameter", "ssm:GetParameters", "ssm:PutParameter", "ssm:DeleteParameter", "ssm:DescribeParameters", "ssm:AddTagsToResource", "ssm:ListTagsForResource", "ssm:RemoveTagsFromResource", "kms:Decrypt"]
+        Action    = ["ec2:*", "elasticloadbalancing:*", "rds:*", "elasticache:*", "ecs:*", "sqs:*", "es:*", "logs:*", "ssm:GetParameter", "ssm:GetParameters", "ssm:PutParameter", "ssm:DeleteParameter", "ssm:DescribeParameters", "ssm:AddTagsToResource", "ssm:ListTagsForResource", "ssm:RemoveTagsFromResource", "kms:Decrypt"]
         Resource  = "*"
         Condition = { StringEquals = { "aws:RequestedRegion" = local.region } }
       },
@@ -131,7 +151,7 @@ resource "aws_iam_role_policy" "codebuild" {
         Action   = ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole", "iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListInstanceProfilesForRole", "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile", "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile", "iam:TagInstanceProfile", "iam:PassRole"]
         Resource = ["arn:aws:iam::${local.account}:role/infraflow/env/*", "arn:aws:iam::${local.account}:instance-profile/infraflow/env/*"]
       },
-      { Effect = "Allow", Action = ["iam:CreateServiceLinkedRole"], Resource = "*", Condition = { StringLike = { "iam:AWSServiceName" = ["elasticloadbalancing.amazonaws.com", "rds.amazonaws.com"] } } },
+      { Effect = "Allow", Action = ["iam:CreateServiceLinkedRole"], Resource = "*", Condition = { StringLike = { "iam:AWSServiceName" = ["elasticloadbalancing.amazonaws.com", "rds.amazonaws.com", "elasticache.amazonaws.com", "ecs.amazonaws.com", "opensearchservice.amazonaws.com"] } } },
     ]
   })
 }

@@ -154,7 +154,13 @@ def compile_main(catalog, blueprint_ref: str, components_rel: str) -> str:
             inputs = req.get("inputs") or {}
             src = bindings.get(f"{inst}.{req['port']}")
             w("")
-            w(f"  # binding: {inst}.{req['port']} <- {src} ({req['type']}, {req.get('when', 'present')})")
+            if src is None:
+                w(f"  # binding: {inst}.{req['port']} not bound (optional {req['type']})")
+            else:
+                w(f"  # binding: {inst}.{req['port']} <- {src} ({req['type']}, {req.get('when', 'present')})")
+            if req.get("optional"):
+                # Known at plan time, so the component can use it in count without unknown-value errors.
+                w(f"  {req['enabled_variable']} = {'true' if src else 'false'}")
             if not inputs or src is None:
                 continue
             t_inst, t_port = src.split(".", 1)

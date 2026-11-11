@@ -1,0 +1,43 @@
+ics_version: "0.1"
+component:
+  name: aws-ebs-volume
+  version: 1.0.0
+  owner: infraflow
+  summary: "Encrypted gp3 data volume; snapshotted before hibernation and restored on wake"
+  billing_class: data
+  data_class: persistent
+  resource_types:
+    - aws_ebs_volume
+  data_resource_types: [aws_ebs_volume]
+  primary_resource: aws_ebs_volume.this
+  system_inputs: [name_prefix]
+provides:
+  - port: volume
+    type: storage.ebs/v1
+    attributes: { volume_id: volume_id, availability_zone: availability_zone }
+requires:
+  - port: net
+    type: net.vpc/v1
+    when: present
+    inputs: { private_subnet_ids: subnet_ids }
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+outputs:
+  volume_id:         { stable: true }
+  availability_zone: { stable: true }
+lifecycle:
+  presence_variable: present
+  restore_variable: restore_from_snapshot
+  actions:
+    observe:  { driver: ebs_volume.describe }
+    snapshot: { driver: ebs_volume.snapshot }
+  # A volume cannot be stopped; it is billed per GB-month while it exists.
+  levels: { awake: RUNNING, shallow: RUNNING, deep: RUNNING, hibernate: SNAPSHOTTED }
+  serving_states: [RUNNING]
+health:
+  probe: { driver: terraform.presence, timeout_s: 300 }
+cost:
+  - { meter: ebs_gb_month,      in_states: [RUNNING], param: size }
+  - { meter: snapshot_gb_month, in_states: [SNAPSHOTTED] }
+conformance:
+  claimed_level: L3

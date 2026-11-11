@@ -21,7 +21,7 @@ Every plan is checked before execution: all interleavings of its parallel steps 
 ```
 apps/demo-app/   Reference workload: Node.js and PostgreSQL, used to verify data across Sleep and Wake
 components/      Terraform components with their InfraFlow manifests (component.yaml)
-blueprints/      Environment blueprints composed from components (web-db@1.0.0)
+blueprints/      Environment blueprints composed from components, classified by category
 ics/             Component standard registries and negative examples
 services/        Python core: model, planner, model checker, compiler, Plan Validator,
                  controller, drivers, API; CodeBuild runner; tests
@@ -30,6 +30,23 @@ web/             Management console and sleeping page (static)
 live/dev/        Compiled root module for a manually operated development environment
 docs/            Architecture, component standard, deployment, acceptance criteria
 ```
+
+## Blueprints
+
+| Blueprint | Category | Exposure | Data | Use |
+|---|---|---|---|---|
+| `web-db` | web | public URL | persistent | Web application with PostgreSQL behind an ALB |
+| `web-db-cache` | web | public URL | persistent | Adds a Redis cache, removed in deep sleep |
+| `web-only` | web | public URL | stateless | Frontend or API preview without a database |
+| `web-ecs` | web | public URL | stateless | Container on ECS Fargate behind an ALB |
+| `worker-db` | worker | private | persistent | Batch or ETL jobs with PostgreSQL |
+| `worker-cache` | worker | private | ephemeral | Queue consumers and test runners with Redis |
+| `queue-worker` | worker | private | retained | Worker on an SQS queue whose messages wait while it sleeps |
+| `postgres-sandbox` | data | private | persistent | PostgreSQL reached through SSM port forwarding |
+| `search-sandbox` | data | private | ephemeral | OpenSearch domain, reindexed after each wake |
+| `ml-workbench` | ml | private | persistent | NVIDIA GPU instance with a data volume snapshotted on hibernation |
+
+Exposure, data and hourly cost are derived from the components, not declared; see [Classification](docs/component-standard.md#classification). Private environments are reached with SSM Session Manager port forwarding; see [Private environments](docs/deployment.md#7-private-environments).
 
 ## Quick start
 
@@ -42,6 +59,7 @@ pip install -r services/requirements-dev.txt
 cd services
 python -m unittest discover -s tests -t .      # unit and end-to-end tests, no AWS access
 python -m infraflow.cli check                  # static, composition and model checks for the catalog
+python -m infraflow.cli catalog                # classification and estimated hourly cost per blueprint
 python -m infraflow.cli plan --from deep --to awake
 ```
 

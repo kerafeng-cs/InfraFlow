@@ -1,4 +1,4 @@
-"""Static component checks (S1, S4-S7, F) and Blueprint composition checks (C1-C6).
+"""Static component checks (S1, S4-S7, F) and Blueprint composition checks (C1-C6, M1).
 
 S2 and S8 require running Terraform and belong to dynamic verification; this module covers
 only the checks that need no cloud resources.
@@ -26,6 +26,8 @@ FORBIDDEN = [
     (re.compile(r"ignore_changes\s*=\s*all"), "ignore_changes = all"),
 ]
 RESOURCE_DECL = re.compile(r'^\s*resource\s+"([a-z0-9_]+)"\s+"[A-Za-z0-9_-]+"', re.M)
+VARIABLE_DECL = re.compile(r'^\s*variable\s+"([A-Za-z0-9_]+)"', re.M)
+EXPOSURES = ("public", "none")
 
 
 def _err(out, code, msg):
@@ -53,6 +55,9 @@ def check_component(manifest: dict, registry: dict, tf_dir: str | Path | None = 
     if bclass not in classes:
         _err(out, "S1", f"unknown billing_class: {bclass}")
         return out
+    dclass = c["data_class"]
+    if dclass not in (registry.get("data_classes") or ["none", "persistent", "ephemeral"]):
+        _err(out, "S1", f"unknown data_class: {dclass}")
 
     # S5: the declared billing class matches the Resource Type Registry
     for rt in c["resource_types"]:
@@ -65,8 +70,12 @@ def check_component(manifest: dict, registry: dict, tf_dir: str | Path | None = 
             rank = {"free": 0, "stoppable": 1, "hourly_no_data": 2, "data": 3}
             if rank[forced] > rank[bclass] or forced == "data":
                 _err(out, "S5", f"{rt} is class {forced} but the component declares {bclass}")
-        if rtypes[rt].get("data") and c.get("data_class") == "none":
+        if rtypes[rt].get("data") and dclass == "none":
             _err(out, "S5", f"{rt} holds data but data_class is none")
+        if rtypes[rt].get("volatile") and dclass != "ephemeral":
+            _err(out, "S5", f"{rt} loses its data when removed, so data_class must be ephemeral, not {dclass}")
+    if bclass == "data" and dclass != "persistent":
+        _err(out, "S5", f"class data requires data_class persistent, not {dclass}")
 
     # S6: lifecycle matches the billing class
     lc = manifest.get("lifecycle") or {}
@@ -113,6 +122,8 @@ def check_component(manifest: dict, registry: dict, tf_dir: str | Path | None = 
             continue
         if r.get("when", "present") not in ("present", "serving"):
             _err(out, "S7", f"port {r['port']}: when must be present or serving")
+        if r.get("optional") and not r.get("enabled_variable"):
+            _err(out, "S7", f"port {r['port']}: an optional port must name an enabled_variable")
         for attr in (r.get("inputs") or {}):
             if attr not in ptypes[r["type"]]:
                 _err(out, "S7", f"port {r['port']}: attribute {attr} is not part of {r['type']}")
@@ -132,6 +143,19 @@ def check_component(manifest: dict, registry: dict, tf_dir: str | Path | None = 
             for rx, what in FORBIDDEN:
                 if rx.search(text):
                     _err(out, "F", f"FORBIDDEN_CONSTRUCT: {what} in {f.name}")
+        # S7: every variable the manifest maps must exist in the module
+        variables = set()
+        for f in sorted(tf_dir.glob("*.tf")):
+            variables |= set(VARIABLE_DECL.findall(f.read_text(encoding="utf-8")))
+        mapped = set(c.get("system_inputs") or [])
+        for r in manifest.get("requires") or []:
+            mapped |= set((r.get("inputs") or {}).values())
+            if r.get("enabled_variable"):
+                mapped.add(r["enabled_variable"])
+        if lc.get("restore_variable"):
+            mapped.add(lc["restore_variable"])
+        for v in sorted(mapped - variables):
+            _err(out, "S7", f"variable {v} is mapped in the manifest but not declared in the module")
         missing = declared - set(c["resource_types"])
         extra = set(c["resource_types"]) - declared
         if missing:
@@ -143,8 +167,9 @@ def check_component(manifest: dict, registry: dict, tf_dir: str | Path | None = 
 
 
 def check_composition(bp: dict, catalog) -> list:
-    """C1-C6."""
+    """C1-C6 and M1."""
     out: list = []
+    meta = bp.get("blueprint") or {}
     instances = bp.get("instances") or {}
     comps = {}
     for name, spec in instances.items():
@@ -193,7 +218,7 @@ def check_composition(bp: dict, catalog) -> list:
 
     for i, m in comps.items():
         for r in m.get("requires") or []:
-            if (i, r["port"]) not in bound:
+            if (i, r["port"]) not in bound and not r.get("optional"):
                 _err(out, "C1", f"{i}.{r['port']} ({r['type']}) has no binding")
 
     # C3: no cycles
@@ -213,14 +238,25 @@ def check_composition(bp: dict, catalog) -> list:
     if any(state.get(u) is None and dfs(u) for u in comps):
         _err(out, "C3", "the dependency graph has a cycle")
 
-    # C4
-    if dns_bindings != 1:
-        _err(out, "C4", f"exactly one binding to sys.dns is required, found {dns_bindings}")
+    # C4: a public blueprint has exactly one URL; a private one has none
+    exposure = meta.get("exposure", "public")
+    if exposure not in EXPOSURES:
+        _err(out, "C4", f"exposure must be public or none, not {exposure}")
+    elif exposure == "public" and dns_bindings != 1:
+        _err(out, "C4", f"a public blueprint requires exactly one binding to sys.dns, found {dns_bindings}")
+    elif exposure == "none" and dns_bindings:
+        _err(out, "C4", "a blueprint with exposure none must not bind sys.dns")
 
     # C6: every instance supports each declared level
     for lv in bp.get("supported_levels") or []:
         for i, m in comps.items():
             if lv not in ((m.get("lifecycle") or {}).get("levels") or {}):
                 _err(out, "C6", f"{i} does not support level {lv}")
+
+    # M1: the declared category is in the registry
+    categories = (getattr(catalog, "registry", None) or {}).get("categories") or {}
+    category = (meta.get("classification") or {}).get("category")
+    if category not in categories:
+        _err(out, "M1", f"classification.category must be one of {', '.join(categories)}, not {category}")
 
     return out

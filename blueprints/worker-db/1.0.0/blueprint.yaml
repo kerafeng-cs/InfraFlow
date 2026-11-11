@@ -1,0 +1,25 @@
+ics_version: "0.1"
+blueprint:
+  name: worker-db
+  version: 1.0.0
+  owner: infraflow
+  summary: "Background worker (Docker on EC2) with PostgreSQL and no public URL"
+  exposure: none
+  classification:
+    category: worker
+    use_cases: ["Scheduled batch or ETL jobs that run during working hours", "Queue consumers and integration test runners"]
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+instances:
+  network:  { component: aws-network-basic@1.0.0 }
+  egress:   { component: aws-nat-egress@1.0.0 }
+  database: { component: aws-rds-postgres@1.0.0,   parameters: { size: "${param.size}" } }
+  app:      { component: aws-ec2-docker-app@1.1.0, parameters: { size: "${param.size}" } }
+bindings:                     # from = requires side, to = provides side
+  - { from: egress.net,   to: network.net }
+  - { from: database.net, to: network.net }
+  - { from: app.net,      to: network.net }
+  - { from: app.egress,   to: egress.egress }
+  - { from: app.db,       to: database.db }
+  - { from: app.workload, to: sys.lease_app }
+supported_levels: [awake, deep, hibernate]

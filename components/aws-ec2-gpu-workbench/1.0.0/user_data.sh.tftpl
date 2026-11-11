@@ -1,0 +1,45 @@
+#!/bin/bash
+set -euxo pipefail
+
+mkdir -p /opt/infraflow /data
+cat > /opt/infraflow/start.sh <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+# NVMe device names are not stable; find the data volume by its serial (the volume id without "-").
+SERIAL="${replace(volume_id, "-", "")}"
+DEV=""
+for i in $(seq 1 60); do
+  DEV=$(lsblk -dno NAME,SERIAL | awk -v s="$SERIAL" '$2 == s {print "/dev/" $1}')
+  [ -n "$DEV" ] && break
+  sleep 5
+done
+[ -n "$DEV" ] || { echo "data volume not attached"; exit 1; }
+# Format only a new, empty volume; a restored volume keeps its file system.
+blkid "$DEV" >/dev/null || mkfs -t xfs "$DEV"
+mountpoint -q /data || mount "$DEV" /data
+docker rm -f app 2>/dev/null || true
+for i in $(seq 1 30); do docker pull "${app_image}" && break; sleep 10; done
+exec docker run --name app --gpus all -p ${app_port}:${app_port} \
+  -e PORT=${app_port} -e INFRAFLOW_ENV_ID=${env_id} -v /data:/data "${app_image}"
+SCRIPT
+chmod +x /opt/infraflow/start.sh
+
+cat > /etc/systemd/system/infraflow-app.service <<'UNIT'
+[Unit]
+Description=InfraFlow workbench container
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/infraflow/start.sh
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now docker
+systemctl enable --now infraflow-app.service

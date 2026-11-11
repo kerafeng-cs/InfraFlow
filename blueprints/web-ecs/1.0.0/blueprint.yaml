@@ -1,0 +1,27 @@
+ics_version: "0.1"
+blueprint:
+  name: web-ecs
+  version: 1.0.0
+  owner: infraflow
+  summary: "Web application on ECS Fargate behind an ALB, without a database"
+  exposure: public
+  classification:
+    category: web
+    use_cases: ["Preview of a containerized service that runs on ECS in production", "Stateless API or frontend without servers to manage"]
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+instances:
+  network: { component: aws-network-basic@1.0.0 }
+  egress:  { component: aws-nat-egress@1.0.0 }
+  entry:   { component: aws-alb-ip-entry@1.0.0 }
+  service: { component: aws-ecs-fargate-service@1.0.0, parameters: { size: "${param.size}" } }
+bindings:                     # from = requires side, to = provides side
+  - { from: egress.net,       to: network.net }
+  - { from: entry.net,        to: network.net }
+  - { from: entry.workload,   to: sys.lease_app }
+  - { from: service.net,      to: network.net }
+  - { from: service.egress,   to: egress.egress }
+  - { from: service.target,   to: entry.target }
+  - { from: service.workload, to: sys.lease_app }
+  - { from: sys.dns,          to: entry.public }
+supported_levels: [awake, deep, hibernate]

@@ -140,6 +140,36 @@ class Flow(unittest.TestCase):
         tot = b["totals"]
         self.assertGreater(tot["always_on"], tot["infraflow"])
 
+    def test_private_blueprint_has_no_public_url(self):
+        st, body = self.create(name="jobs", environments=["dev"], blueprint_ref="worker-cache@1.0.0")
+        self.assertEqual(st, 202)
+        env_id, op_id = self.invoked[0]
+        r = self.run_controller(env_id, op_id)
+        self.assertEqual((r["result"], r["action"]), ("started", "WAKE"))
+        plan = self.sfn.started[-1]["input"]["plan"]
+        self.assertEqual((plan["pre"], plan["post"]), ([], []))
+        self.assertEqual(set(plan["to"]), {"network", "egress", "cache", "app"})
+        self.complete_last()
+        st, env = self.call("GET", f"/v1/environments/{env_id}")
+        self.assertEqual((env["actual"], env["exposure"], env["url"]), ("AWAKE", "none", None))
+        st, b = self.call("GET", "/v1/public/status", query={"host": env_id})
+        self.assertEqual(st, 404)
+        st, b = self.call("POST", "/v1/public/wake", {"host": env_id})
+        self.assertEqual(st, 404)
+        # Cost uses the components of this Blueprint (Redis, no ALB)
+        controller._NOW = T0 + timedelta(hours=3)
+        st, b = self.call("GET", f"/v1/leases/{body['lease_id']}/cost")
+        self.assertEqual(st, 200)
+        self.assertGreater(b["totals"]["always_on"], 0)
+
+    def test_catalog_lists_classification(self):
+        st, b = self.call("GET", "/v1/catalog/blueprints")
+        self.assertEqual(st, 200)
+        by_ref = {i["ref"]: i["classification"] for i in b["items"]}
+        self.assertEqual(by_ref["web-db@1.0.0"]["exposure"], "public")
+        self.assertEqual(by_ref["worker-cache@1.0.0"]["data"], "ephemeral")
+        self.assertEqual(by_ref["web-only@1.0.0"]["data"], "stateless")
+
     def test_outside_schedule_only_prepares(self):
         controller._NOW = T0 + timedelta(hours=12)  # 21:00
         st, body = self.create()

@@ -4,6 +4,10 @@ blueprint:
   version: 1.0.0
   owner: infraflow
   summary: "Web application (Docker on EC2) with PostgreSQL behind an ALB"
+  exposure: public
+  classification:
+    category: web
+    use_cases: ["Staging or QA for a web application with a relational database", "Customer demos that must keep their data between sessions"]
 parameters:
   size: { type: string, enum: [small, medium], default: small }
 instances:

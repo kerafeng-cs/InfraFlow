@@ -1,0 +1,52 @@
+ics_version: "0.1"
+component:
+  name: aws-ssm-bastion
+  version: 1.0.0
+  owner: infraflow
+  summary: "Small EC2 instance in a private subnet for SSM port forwarding to private services"
+  billing_class: stoppable
+  data_class: none
+  resource_types:
+    - aws_instance
+    - aws_security_group
+    - aws_vpc_security_group_egress_rule
+    - aws_vpc_security_group_ingress_rule
+    - aws_iam_role
+    - aws_iam_role_policy_attachment
+    - aws_iam_instance_profile
+  data_resource_types: []
+  primary_resource: aws_instance.bastion
+  system_inputs: [name_prefix]
+provides: []
+requires:
+  - port: net
+    type: net.vpc/v1
+    when: present
+    inputs: { vpc_id: vpc_id, private_subnet_ids: subnet_ids }
+  - port: egress
+    type: net.egress/v1
+    when: serving                    # the SSM agent reaches the SSM endpoints through NAT
+  - port: db
+    type: db.postgres/v1
+    when: serving
+    optional: true
+    enabled_variable: db_enabled
+    inputs: { port: db_port, security_group_id: db_security_group_id }
+parameters: {}
+outputs:
+  instance_id: { stable: true }
+lifecycle:
+  presence_variable: present
+  actions:
+    observe: { driver: ec2_bastion.describe }
+    start:   { driver: ec2_bastion.start }
+    stop:    { driver: ec2_bastion.stop }
+  levels: { awake: RUNNING, shallow: STOPPED, deep: STOPPED, hibernate: ABSENT }
+  serving_states: [RUNNING]
+health:
+  probe: { driver: ec2_bastion.status_ok, timeout_s: 600 }
+cost:
+  - { meter: ec2_instance_hour, in_states: [RUNNING] }
+  - { meter: ebs_gb_month,      in_states: [RUNNING, STOPPED] }
+conformance:
+  claimed_level: L2

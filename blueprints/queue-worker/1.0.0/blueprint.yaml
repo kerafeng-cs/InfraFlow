@@ -1,0 +1,24 @@
+ics_version: "0.1"
+blueprint:
+  name: queue-worker
+  version: 1.0.0
+  owner: infraflow
+  summary: "Background worker (Docker on EC2) consuming an SQS queue whose messages wait while it sleeps"
+  exposure: none
+  classification:
+    category: worker
+    use_cases: ["Job processors that may run only during working hours", "Testing producers and consumers of an event pipeline"]
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+instances:
+  network: { component: aws-network-basic@1.0.0 }
+  egress:  { component: aws-nat-egress@1.0.0 }
+  queue:   { component: aws-sqs-queue@1.0.0 }
+  app:     { component: aws-ec2-docker-app@1.1.0, parameters: { size: "${param.size}" } }
+bindings:                     # from = requires side, to = provides side
+  - { from: egress.net,   to: network.net }
+  - { from: app.net,      to: network.net }
+  - { from: app.egress,   to: egress.egress }
+  - { from: app.queue,    to: queue.queue }
+  - { from: app.workload, to: sys.lease_app }
+supported_levels: [awake, deep, hibernate]

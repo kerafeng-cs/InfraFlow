@@ -73,3 +73,32 @@ The platform is serverless and costs close to nothing while no Environment is aw
 - Never commit `terraform.tfstate`, plan files or `.env` files; the database password is in the state.
 - Do not create access keys for the root user. If a key leaks, deactivate it, delete it, and create a new one.
 - The API role has no infrastructure permissions. The controller and drivers can start, stop and snapshot only resources tagged `infraflow:managed=true`. CodeBuild is limited to the Registry resource types in the platform region, and to IAM entities under the `/infraflow/env/` path.
+
+## 7. Private environments
+
+Blueprints with exposure `none` have no URL and no inbound rules. Operators reach them with SSM Session Manager port forwarding, which needs the AWS CLI and the Session Manager plugin, and IAM permission for `ssm:StartSession` in the account. The instance id is shown by `aws ec2 describe-instances --filters Name=tag:infraflow:env_id,Values=<env_id>`.
+
+| Blueprint | Target instance (`Name` tag) | Forward to |
+|---|---|---|
+| `postgres-sandbox` | `<env_id>-bastion` | the RDS endpoint, port 5432; the password is in SSM at `/infraflow/env/<env_id>/db_password` |
+| `search-sandbox` | `<env_id>-bastion` | the domain endpoint in `/infraflow/env/<env_id>/search_endpoint`, port 443 |
+| `ml-workbench` | `<env_id>-workbench` | the container port of the Lease, for example 8888 for JupyterLab |
+| `worker-*`, `queue-worker` | `<env_id>-app` | the container port of the Lease |
+
+To a remote host through the bastion:
+
+```bash
+aws ssm start-session --target <instance_id> \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters host=<private_host>,portNumber=5432,localPortNumber=5432
+```
+
+To a port on the instance itself:
+
+```bash
+aws ssm start-session --target <instance_id> \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters portNumber=8888,localPortNumber=8888
+```
+
+`ml-workbench` runs on `g4dn` instances. If the account quota "Running On-Demand G and VT instances" is 0, the first wake fails with `VcpuLimitExceeded` and the Environment is blocked; request at least 4 vCPUs (8 for size `medium`) in Service Quotas first.

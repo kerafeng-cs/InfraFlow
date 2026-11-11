@@ -391,7 +391,7 @@
   const RESOURCE_ORDER = ["network", "egress", "database", "app", "entry"];
   const RESOURCE_LABEL = { PRESENT: "Present", RUNNING: "Running", STOPPED: "Stopped", ABSENT: "Absent", SNAPSHOTTED: "Snapshot" };
   const RESOURCE_TONE = { PRESENT: "ok", RUNNING: "ok", STOPPED: "sleep", ABSENT: "neutral", SNAPSHOTTED: "hibernate" };
-  const RESOURCE_CLASS = { network: "free", egress: "hourly, no data", database: "data", app: "stoppable", entry: "hourly, no data" };
+  const CLASS_LABEL = { free: "free", stoppable: "stoppable", hourly_no_data: "hourly, no data", data: "data" };
 
   function resource_names(instances)
   {
@@ -508,29 +508,30 @@
   // Shared: environment row and actions
   // ---------------------------------------------------------------------------
 
+  // Copy for the three actions. A private Environment (exposure none) has no URL to switch.
   const ACTION_COPY = {
     wake: {
       title: "Wake",
-      hint: "Start everything and switch the URL to the application.",
-      body: (name) => html`<p>Wake <strong>${name}</strong>. NAT, the load balancer, the application and the database start, and billing for them resumes. The URL switches to the application once the health check passes.</p>`,
+      hint: (env) => env.exposure === "none" ? "Start every resource of the blueprint." : "Start everything and switch the URL to the application.",
+      body: (name, env) => html`<p>Wake <strong>${name}</strong>. Every resource of the blueprint is created or started, and billing for it resumes.${env.exposure === "none" ? "" : " The URL switches to the application once the health check passes."}</p>`,
     },
     sleep: {
       title: "Sleep",
-      hint: "Stop compute and remove NAT and the load balancer. Data is kept.",
-      body: (name) => html`<p>Put <strong>${name}</strong> into deep sleep. The URL switches to the sleeping page, then NAT and the load balancer are removed and the application and database are stopped. Data is kept.</p>`,
+      hint: () => "Stop compute and remove hourly-billed resources. Persistent data is kept.",
+      body: (name, env) => html`<p>Put <strong>${name}</strong> into deep sleep.${env.exposure === "none" ? "" : " The URL switches to the sleeping page first."} Hourly-billed resources such as NAT, the load balancer and caches are removed; compute and databases are stopped. Persistent data is kept; cache contents are lost.</p>`,
     },
     hibernate: {
       title: "Hibernate",
-      hint: "Snapshot the database, then remove every billable resource.",
-      body: (name) => html`<p>Hibernate <strong>${name}</strong>. The database is snapshotted, the snapshot is verified, and then every billable resource is removed. Waking restores the database from the snapshot and takes longer.</p>`,
+      hint: () => "Snapshot persistent data, then remove every billable resource.",
+      body: (name) => html`<p>Hibernate <strong>${name}</strong>. Persistent data (databases, data volumes) is snapshotted, each snapshot is verified, and then every billable resource is removed. Waking restores from the snapshots and takes longer.</p>`,
     },
   };
 
   function action_button(env, name, extra_class)
   {
     const a = (env.actions || {})[name] || { allowed: false, reason: null };
-    const why = a.allowed ? ACTION_COPY[name].hint : reason_text(name, a.reason);
-    return html`<button type="button" class="btn ${extra_class}" data-action="${name}" data-env="${env.environment_id}" data-name="${env.name}" title="${why}" ${a.allowed ? "" : DISABLED}>${ACTION_COPY[name].title}</button>`;
+    const why = a.allowed ? ACTION_COPY[name].hint(env) : reason_text(name, a.reason);
+    return html`<button type="button" class="btn ${extra_class}" data-action="${name}" data-env="${env.environment_id}" data-name="${env.name}" data-exposure="${env.exposure || "public"}" title="${why}" ${a.allowed ? "" : DISABLED}>${ACTION_COPY[name].title}</button>`;
   }
 
   function env_row(env)
@@ -542,7 +543,7 @@
       <td data-label="State" class="state-cell">${pill(state)}${target ? html`<span class="target">${target}</span>` : ""}${env.blocked_reason ? html`<span class="target">${env.blocked_reason.code}</span>` : ""}</td>
       <td data-label="Next change" class="small">${next_text(env.next_change) || html`<span class="muted">None scheduled</span>`}</td>
       <td data-label="Checked" class="small nowrap">${ago(env.observed_at)}</td>
-      <td data-label="Links" class="small nowrap"><a href="${env.url}" target="_blank" rel="noopener noreferrer">Public URL</a>${env.app_url ? html`<br><a href="${env.app_url}" target="_blank" rel="noopener noreferrer">Application</a>` : ""}</td>
+      <td data-label="Links" class="small nowrap">${env.url ? html`<a href="${env.url}" target="_blank" rel="noopener noreferrer">Public URL</a>` : html`<span class="muted" title="This blueprint has no public URL">Private</span>`}${env.app_url ? html`<br><a href="${env.app_url}" target="_blank" rel="noopener noreferrer">Application</a>` : ""}</td>
       <td data-label="Actions" class="actions"><div class="btn-row">${action_button(env, "wake", "sm")}${action_button(env, "sleep", "sm")}</div></td>
     </tr>`;
   }
@@ -559,7 +560,8 @@
     }
     const action = button.dataset.action;
     const copy = ACTION_COPY[action];
-    const ok = await confirm_dialog(`${copy.title} ${button.dataset.name}?`, copy.body(button.dataset.name), copy.title, action !== "wake");
+    const env_like = { exposure: button.dataset.exposure };
+    const ok = await confirm_dialog(`${copy.title} ${button.dataset.name}?`, copy.body(button.dataset.name, env_like), copy.title, action !== "wake");
     if (!ok)
     {
       return;
@@ -867,6 +869,47 @@
   const MAX_ENVS = 5;
   const MAX_DAYS = 120;
 
+  const CATEGORY_LABELS = { web: "Web", worker: "Worker", data: "Data", ml: "ML" };
+  const DATA_LABELS = {
+    persistent: ["Persistent data", "Kept across sleep; snapshotted before hibernation."],
+    retained: ["Retained data", "Kept while asleep; deleted without a backup at expiry."],
+    ephemeral: ["Ephemeral data", "Held in memory and lost on sleep."],
+    stateless: ["Stateless", "Keeps no data of its own."],
+  };
+  const LEVEL_LABELS = { awake: "Awake", shallow: "Shallow", deep: "Deep sleep", hibernate: "Hibernated" };
+
+  function usd(value)
+  {
+    if (value === 0)
+    {
+      return "$0";
+    }
+    return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(3)}`;
+  }
+
+  function blueprint_card(bp, size, checked)
+  {
+    const c = bp.classification;
+    const hourly = c.hourly_usd[size] || c.hourly_usd.small;
+    const [data_label, data_help] = DATA_LABELS[c.data] || [c.data, ""];
+    const [name, version] = bp.ref.split("@");
+    return html`<label class="bp-card">
+      <input type="radio" name="lf-bp" value="${bp.ref}" ${checked ? CHECKED : ""}>
+      <span class="bp-head"><strong>${name}</strong><span class="mono faint">${version}</span></span>
+      <span class="bp-summary">${bp.summary || ""}</span>
+      <span class="bp-tags">
+        <span class="tag">${CATEGORY_LABELS[c.category] || c.category}</span>
+        <span class="tag" title="${c.exposure === "public" ? "Served on a public URL with a sleeping page" : "No public URL; reachable inside its own network only"}">${c.exposure === "public" ? "Public URL" : "Private"}</span>
+        <span class="tag" title="${data_help}">${data_label}</span>
+      </span>
+      <span class="bp-parts mono">${(bp.instance_order || Object.keys(bp.instances)).join(" / ")}</span>
+      <span class="bp-cost">
+        <span><span class="label">Awake</span><span class="value">${usd(hourly.awake)}/h</span></span>
+        <span><span class="label">${LEVEL_LABELS[c.deepest_level] || c.deepest_level}</span><span class="value">${usd(hourly[c.deepest_level])}/h</span></span>
+      </span>
+    </label>`;
+  }
+
   async function new_lease_view()
   {
     const now = new Date();
@@ -876,14 +919,19 @@
       <form id="lease-form" class="form" novalidate>
         <fieldset><legend>Lease</legend><div class="fields">
           <div class="field"><label for="lf-name">Name</label><input id="lf-name" required maxlength="16" autocomplete="off" spellcheck="false" placeholder="acme"><span class="help">2 to 16 lowercase letters or digits, starting with a letter.</span></div>
-          <div class="field"><label for="lf-blueprint">Blueprint</label><select id="lf-blueprint"><option value="">Loading...</option></select></div>
           <div class="field"><label for="lf-size">Size</label><select id="lf-size"><option value="small">Small</option><option value="medium">Medium</option></select></div>
         </div></fieldset>
+
+        <fieldset id="lf-blueprint"><legend>Blueprint</legend>
+          <div class="bp-filter" id="lf-bp-filter" role="group" aria-label="Filter by category"></div>
+          <div class="bp-grid" id="lf-bp-list" tabindex="-1" role="radiogroup" aria-label="Blueprint"><p class="muted">Loading the catalog...</p></div>
+          <p class="help bp-note">Estimated USD per hour in ap-southeast-1 at the selected size, awake and at the deepest sleep level the blueprint supports.</p>
+        </fieldset>
 
         <fieldset><legend>Environments</legend>
           <div class="repeat-list" id="lf-envs"></div>
           <br>
-          <div class="btn-row"><button type="button" class="btn sm" id="lf-add-env">Add environment</button><span class="help">Up to ${MAX_ENVS}. Each name is 1 to 8 lowercase letters or digits. Every Environment is a separate copy with its own database and URL.</span></div>
+          <div class="btn-row"><button type="button" class="btn sm" id="lf-add-env">Add environment</button><span class="help">Up to ${MAX_ENVS}. Each name is 1 to 8 lowercase letters or digits. Every Environment is a separate copy of the blueprint.</span></div>
         </fieldset>
 
         <fieldset><legend>Lifetime</legend><div class="fields">
@@ -891,16 +939,19 @@
           <div class="field"><label for="lf-end">Expires</label><input id="lf-end" type="datetime-local" value="${to_local_input(later)}" required><span class="help">At most ${MAX_DAYS} days after the start. Environments are reclaimed at expiry.</span></div>
         </div></fieldset>
 
-        <fieldset><legend>Application</legend><div class="fields">
+        <fieldset id="lf-app"><legend>Application</legend><div class="fields">
           <div class="field wide"><label for="lf-image">Container image (linux/amd64)</label><input id="lf-image" value="ghcr.io/kerafeng-cs/infraflow-demo-app:1" spellcheck="false"></div>
           <div class="field"><label for="lf-port">Port</label><input id="lf-port" type="number" min="1" max="65535" value="8080"></div>
-          <div class="field"><label for="lf-health">Health check path</label><input id="lf-health" value="/healthz" spellcheck="false"></div>
-        </div></fieldset>
+          <div class="field" id="lf-health-field"><label for="lf-health">Health check path</label><input id="lf-health" value="/healthz" spellcheck="false"></div>
+        </div>
+        <p class="help" id="lf-private-help" hidden>This blueprint has no public URL. Reach the container or the private services with SSM Session Manager port forwarding.</p>
+        </fieldset>
 
         <fieldset id="lf-policy"><legend>Activity</legend>${policy_fields("lf", { mode: "on_demand", idle_timeout_minutes: 60 })}</fieldset>
 
-        <fieldset><legend>Data at expiry</legend>
-          <label class="check"><input type="checkbox" id="lf-keep" checked> Keep a final database snapshot when the Lease is reclaimed</label>
+        <fieldset id="lf-data"><legend>Data at expiry</legend>
+          <label class="check"><input type="checkbox" id="lf-keep" checked> Keep a final snapshot of the persistent data when the Lease is reclaimed</label>
+          <p class="help" id="lf-keep-none" hidden>This blueprint keeps no data that survives sleep, so there is nothing to back up at expiry.</p>
         </fieldset>
 
         <p class="error-text form-error" role="alert"></p>
@@ -952,13 +1003,68 @@
     start_input.addEventListener("change", sync_dates);
     sync_dates();
 
+    let blueprints = [];
+    let category = "all";
+    const selected_blueprint = () => blueprints.find((b) => b.ref === form.querySelector("input[name=lf-bp]:checked")?.value);
+    const sync_blueprint = () =>
+    {
+      const bp = selected_blueprint();
+      const persistent = !bp || bp.classification.data === "persistent";
+      $("lf-keep").closest("label").hidden = !persistent;
+      $("lf-keep-none").hidden = persistent;
+      $("lf-app").hidden = Boolean(bp) && !bp.classification.workload;
+      $("lf-health-field").hidden = Boolean(bp) && bp.classification.exposure !== "public";
+      $("lf-private-help").hidden = !bp || bp.classification.exposure === "public";
+    };
+    const render_blueprints = () =>
+    {
+      const size = $("lf-size").value;
+      const current = form.querySelector("input[name=lf-bp]:checked")?.value;
+      const shown = blueprints.filter((b) => category === "all" || b.classification.category === category);
+      mount($("lf-bp-list"), shown.length ? html`${shown.map((b) => blueprint_card(b, size, b.ref === current))}` : html`<p class="muted">No blueprint in this category yet.</p>`);
+      if (!form.querySelector("input[name=lf-bp]:checked") && shown.length)
+      {
+        form.querySelector("input[name=lf-bp]").checked = true;
+      }
+      sync_blueprint();
+    };
+    $("lf-bp-list").addEventListener("change", sync_blueprint);
+    $("lf-size").addEventListener("change", render_blueprints);
+
     try
     {
       const catalog = await api("GET", "/v1/catalog/blueprints");
-      mount($("lf-blueprint"), html`${(catalog.items || []).map((b) => html`<option value="${b.ref}">${b.ref}${b.summary ? ` - ${b.summary}` : ""}</option>`)}`);
+      // Web first, ML last; by name within a category
+      const rank = (c) => Object.keys(CATEGORY_LABELS).indexOf(c);
+      blueprints = (catalog.items || []).sort((a, b) => rank(a.classification.category) - rank(b.classification.category) || a.ref.localeCompare(b.ref));
+      const counts = {};
+      for (const b of blueprints)
+      {
+        counts[b.classification.category] = (counts[b.classification.category] || 0) + 1;
+      }
+      // Fixed order; categories without a blueprint yet are not offered as filters.
+      const categories = Object.keys(CATEGORY_LABELS).filter((c) => counts[c]);
+      const filter = $("lf-bp-filter");
+      mount(filter, html`<button type="button" aria-pressed="true" data-category="all">All <span>${blueprints.length}</span></button>${categories.map((c) => html`<button type="button" aria-pressed="false" data-category="${c}" title="${(catalog.categories || {})[c] || ""}">${CATEGORY_LABELS[c]} <span>${counts[c]}</span></button>`)}`);
+      filter.onclick = (event) =>
+      {
+        const button = event.target.closest("button");
+        if (!button)
+        {
+          return;
+        }
+        category = button.dataset.category;
+        for (const b of filter.querySelectorAll("button"))
+        {
+          b.setAttribute("aria-pressed", String(b === button));
+        }
+        render_blueprints();
+      };
+      render_blueprints();
     }
     catch (err)
     {
+      mount($("lf-bp-list"), html``);
       show_form_error(form, err);
     }
 
@@ -982,11 +1088,12 @@
           throw field_error(inputs[i].id, `The name "${names[i]}" is used twice.`);
         }
       }
-      const blueprint = $("lf-blueprint").value;
-      if (!blueprint)
+      const bp = selected_blueprint();
+      if (!bp)
       {
-        throw field_error("lf-blueprint", "No certified blueprint is available.");
+        throw field_error("lf-bp-list", "Choose a blueprint.");
       }
+      const blueprint = bp.ref;
       const start = new Date(start_input.value);
       const end = new Date(end_input.value);
       if (isNaN(start) || isNaN(end) || end <= start)
@@ -997,32 +1104,42 @@
       {
         throw field_error("lf-end", `A Lease lasts at most ${MAX_DAYS} days.`);
       }
-      const port = Number($("lf-port").value);
-      if (!Number.isInteger(port) || port < 1 || port > 65535)
-      {
-        throw field_error("lf-port", "Port must be a whole number from 1 to 65535.");
-      }
-      const health = $("lf-health").value.trim();
-      if (!health.startsWith("/"))
-      {
-        throw field_error("lf-health", "The health check path must start with /.");
-      }
-      const image = $("lf-image").value.trim();
-      if (!image)
-      {
-        throw field_error("lf-image", "Enter a container image.");
-      }
-      return {
+      const body = {
         name,
         blueprint_ref: blueprint,
         parameters: { size: $("lf-size").value },
         environments: names,
         starts_at: start.toISOString(),
         expires_at: end.toISOString(),
-        app: { image, port, health_path: health },
         activity_policy: read_policy($("lf-policy"), "lf"),
-        data_policy: { keep_final_backup: $("lf-keep").checked },
+        data_policy: { keep_final_backup: bp.classification.data === "persistent" && $("lf-keep").checked },
       };
+      // Blueprints that run no container of the Lease (a database or search sandbox) take no app settings.
+      if (bp.classification.workload)
+      {
+        body.app = read_app(bp.classification.exposure === "public");
+      }
+      return body;
+    };
+
+    const read_app = (public_url) =>
+    {
+      const image = $("lf-image").value.trim();
+      if (!image)
+      {
+        throw field_error("lf-image", "Enter a container image.");
+      }
+      const port = Number($("lf-port").value);
+      if (!Number.isInteger(port) || port < 1 || port > 65535)
+      {
+        throw field_error("lf-port", "Port must be a whole number from 1 to 65535.");
+      }
+      const health = $("lf-health").value.trim();
+      if (public_url && !health.startsWith("/"))
+      {
+        throw field_error("lf-health", "The health check path must start with /.");
+      }
+      return { image, port, health_path: public_url ? health : "/" };
     };
 
     const create_key = crypto.randomUUID();
@@ -1044,9 +1161,9 @@
         <dt>Blueprint</dt><dd>${body.blueprint_ref}, ${body.parameters.size}</dd>
         <dt>Environments</dt><dd>${body.environments.join(", ")}</dd>
         <dt>Lifetime</dt><dd>${when(body.starts_at)} to ${when(body.expires_at)}</dd>
-        <dt>Application</dt><dd><code>${body.app.image}</code>, port ${body.app.port}, health <code>${body.app.health_path}</code></dd>
+        ${body.app ? html`<dt>Application</dt><dd><code>${body.app.image}</code>, port ${body.app.port}${selected_blueprint().classification.exposure === "public" ? html`, health <code>${body.app.health_path}</code>` : ""}</dd>` : ""}
         <dt>Activity</dt><dd>${policy_summary(body.activity_policy)}</dd>
-        <dt>At expiry</dt><dd>${body.data_policy.keep_final_backup ? "Keep a final snapshot" : "Delete the database without a snapshot"}</dd>
+        <dt>At expiry</dt><dd>${selected_blueprint().classification.data !== "persistent" ? "Nothing to keep" : body.data_policy.keep_final_backup ? "Keep a final snapshot" : "Delete the data without a snapshot"}</dd>
       </dl>`, "Create Lease", false);
       if (!ok)
       {
@@ -1329,11 +1446,12 @@
       const active = items.find((o) => o.operation_id === env.active_operation_id);
       const busy = Boolean(env.active_operation_id);
       const instances = env.instances || {};
-      const names = resource_names(instances);
+      const names = env.resources ? env.resources.map((r) => r.name) : resource_names(instances);
+      const classes = Object.fromEntries((env.resources || []).map((r) => [r.name, r.billing_class]));
       const reason = env.blocked_reason || {};
       mount(node, html`<div class="crumbs"><a href="#/">Environments</a> / <a href="#/lease/${encodeURIComponent(env.lease_id)}">Lease</a> / Environment</div>
         <div class="page-head"><div><h1>${env.name}</h1><p class="sub mono">${env.environment_id}</p></div>
-          <div class="btn-row"><a class="btn" href="${env.url}" target="_blank" rel="noopener noreferrer">Public URL</a>${env.app_url ? html`<a class="btn" href="${env.app_url}" target="_blank" rel="noopener noreferrer">Application</a>` : ""}</div></div>
+          <div class="btn-row">${env.url ? html`<a class="btn" href="${env.url}" target="_blank" rel="noopener noreferrer">Public URL</a>` : html`<span class="tag" title="This blueprint has no public URL">Private</span>`}${env.app_url ? html`<a class="btn" href="${env.app_url}" target="_blank" rel="noopener noreferrer">Application</a>` : ""}</div></div>
         ${env.blocked ? html`<div class="notice tone-danger" role="alert"><strong>Blocked: ${reason.code || "unknown reason"}</strong>${reason.detail || "An administrator must investigate and resolve this Environment."}</div>` : ""}
         <div class="grid-2">
           <div class="panel"><div class="panel-head"><h2>State</h2>${pill(state, true)}</div>
@@ -1350,13 +1468,13 @@
             <div class="action-list">${["wake", "sleep", "hibernate"].map((name) =>
             {
               const a = (env.actions || {})[name] || {};
-              return html`<div class="action">${action_button(env, name, name === "wake" ? "primary" : "")}<span class="why">${a.allowed ? ACTION_COPY[name].hint : `Unavailable: ${reason_text(name, a.reason).toLowerCase()}.`}</span></div>`;
+              return html`<div class="action">${action_button(env, name, name === "wake" ? "primary" : "")}<span class="why">${a.allowed ? ACTION_COPY[name].hint(env) : `Unavailable: ${reason_text(name, a.reason).toLowerCase()}.`}</span></div>`;
             })}</div>
           </div>
         </div>
         <div class="panel"><div class="panel-head"><h2>Resources</h2><span class="hint">Observed in AWS ${ago(env.observed_at)}</span></div>
           ${names.length ? html`<div class="table-wrap"><table class="resource-table"><thead><tr><th>Instance</th><th>Billing class</th><th>State</th></tr></thead><tbody>
-            ${names.map((n) => html`<tr><td>${n}</td><td class="muted">${RESOURCE_CLASS[n] || "-"}</td><td>${pill({ text: RESOURCE_LABEL[instances[n]] || instances[n], tone: RESOURCE_TONE[instances[n]] || "neutral" })}</td></tr>`)}
+            ${names.map((n) => html`<tr><td>${n}</td><td class="muted">${CLASS_LABEL[classes[n]] || classes[n] || "-"}</td><td>${pill({ text: RESOURCE_LABEL[instances[n]] || instances[n], tone: RESOURCE_TONE[instances[n]] || "neutral" })}</td></tr>`)}
           </tbody></table></div>` : html`<p class="muted">Not observed yet.</p>`}
         </div>
         <div class="panel"><div class="panel-head"><h2>Operations</h2><span class="hint">Most recent first</span></div>
@@ -1397,7 +1515,14 @@
 
   const BASE_BLUEPRINT = {
     ics_version: "0.1",
-    blueprint: { name: "web-db-custom", version: "1.0.0", owner: "org", summary: "Compose example" },
+    blueprint: {
+      name: "web-db-custom",
+      version: "1.0.0",
+      owner: "org",
+      summary: "Compose example",
+      exposure: "public",
+      classification: { category: "web" },
+    },
     parameters: { size: { type: "string", enum: ["small", "medium"], default: "small" } },
     instances: {
       network: { component: "aws-network-basic@1.0.0" },
@@ -1425,7 +1550,22 @@
     { id: "no-db", label: "Missing database binding", make: (b) => ({ ...b, bindings: b.bindings.filter((x) => x.from !== "app.db") }) },
     { id: "type", label: "Port type mismatch", make: (b) => ({ ...b, bindings: b.bindings.map((x) => (x.from === "entry.backend" ? { ...x, to: "database.db" } : x)) }) },
     { id: "shallow", label: "Unsafe level: shallow", make: (b) => ({ ...b, supported_levels: ["awake", "shallow", "deep", "hibernate"] }) },
+    { id: "worker", label: "Valid: private worker", make: private_worker },
+    { id: "private-url", label: "Private, but binds a URL", make: (b) => ({ ...b, blueprint: { ...b.blueprint, exposure: "none" } }) },
   ];
+
+  // A worker: no load balancer and no URL; the application uses the optional ports of 1.1.0.
+  function private_worker(b)
+  {
+    const instances = { ...b.instances, app: { ...b.instances.app, component: "aws-ec2-docker-app@1.1.0" } };
+    delete instances.entry;
+    return {
+      ...b,
+      blueprint: { ...b.blueprint, name: "worker-custom", exposure: "none", classification: { category: "worker" } },
+      instances,
+      bindings: b.bindings.filter((x) => !x.from.startsWith("entry.") && x.from !== "sys.dns"),
+    };
+  }
 
   function highlight_json(text)
   {
@@ -1455,7 +1595,7 @@
 
   function compose_view()
   {
-    mount(view, html`<div class="page-head"><div><h1>Compose</h1><p class="sub">Check a blueprint before it is used: composition rules C1 to C6, then model checking of every level transition under every interleaving. Nothing is deployed.</p></div></div>
+    mount(view, html`<div class="page-head"><div><h1>Compose</h1><p class="sub">Check a blueprint before it is used: composition rules C1 to C6 and M1, then model checking of every level transition under every interleaving. Nothing is deployed.</p></div></div>
       <div class="panel">
         <div class="examples"><span class="label">Examples</span>${EXAMPLES.map((e) => html`<button type="button" class="btn sm" data-example="${e.id}">${e.label}</button>`)}</div>
         <div class="editor"><div class="gutter" id="cm-gutter" aria-hidden="true"></div>

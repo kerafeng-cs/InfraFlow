@@ -1,4 +1,4 @@
-# InfraFlow Component Standard v0.1: three closed registries.
+# InfraFlow Component Standard v0.1: closed registries.
 # Extending a registry means releasing a new version of the standard.
 ics_version: "0.1"
 
@@ -8,10 +8,16 @@ port_types:
   db.postgres/v1:        [host, port, name, user, password_param, security_group_id]
   http.backend/v1:       [instance_id, port, health_path, security_group_id]
   http.public/v1:        [dns_name, zone_id]
+  cache.redis/v1:        [host, port, security_group_id]
+  queue.sqs/v1:          [queue_url, queue_arn]
+  storage.ebs/v1:        [volume_id, availability_zone]
+  lb.target/v1:          [target_group_arn, security_group_id]
+  search.opensearch/v1:  [endpoint, security_group_id]
   workload.container/v1: [image, port, health_path]
 
 # Permitted resource types with their actual billing class (checked by S5).
 # class: the billing class this resource forces on its component (null = unconstrained).
+# data: holds data that must survive sleep. volatile: holds data that is lost when removed.
 resource_types:
   aws_vpc:                             { class: free }
   aws_internet_gateway:                { class: free }
@@ -37,6 +43,15 @@ resource_types:
   aws_db_subnet_group:                 { class: null }
   aws_ssm_parameter:                   { class: null }
   aws_ebs_volume:                      { class: data, data: true }
+  aws_elasticache_cluster:             { class: hourly_no_data, volatile: true }
+  aws_elasticache_subnet_group:        { class: null }
+  aws_volume_attachment:               { class: null }
+  aws_sqs_queue:                       { class: free }
+  aws_ecs_cluster:                     { class: null }
+  aws_ecs_task_definition:             { class: null }
+  aws_ecs_service:                     { class: stoppable }
+  aws_cloudwatch_log_group:            { class: null }
+  aws_opensearch_domain:               { class: hourly_no_data, volatile: true }
   random_password:                     { class: null }
 
 drivers:
@@ -52,11 +67,40 @@ drivers:
   - rds_instance.snapshot
   - rds_instance.available
   - elbv2.describe
+  - elasticache.describe
+  - ec2_bastion.describe
+  - ec2_bastion.start
+  - ec2_bastion.stop
+  - ec2_bastion.status_ok
+  - ec2_workbench.describe
+  - ec2_workbench.start
+  - ec2_workbench.stop
+  - ec2_workbench.status_ok
+  - ebs_volume.describe
+  - ebs_volume.snapshot
+  - ecs_service.describe
+  - ecs_service.start
+  - ecs_service.stop
+  - sqs.describe
+  - opensearch.describe
   - elbv2.target_healthy
   - dns.point
   - wait.seconds
   - terraform.presence
   - terraform.restore
+
+# Data classes of a component (checked by S5)
+#   persistent: must survive every level; snapshotted before removal
+#   retained:   kept while the resource exists (all sleep levels), not backed up at reclaim
+#   ephemeral:  lost when the resource is removed on sleep
+data_classes: [none, persistent, retained, ephemeral]
+
+# Categories a Blueprint may declare (checked by M1)
+categories:
+  web:    "Web application or API reachable through a public URL"
+  worker: "Background processing without a public URL"
+  data:   "Data service for analysis or integration testing"
+  ml:     "Machine learning workstation or training job"
 
 # Billing class -> valid states
 classes:

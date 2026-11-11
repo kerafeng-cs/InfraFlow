@@ -1,0 +1,23 @@
+ics_version: "0.1"
+blueprint:
+  name: search-sandbox
+  version: 1.0.0
+  owner: infraflow
+  summary: "Private OpenSearch domain reached through SSM port forwarding; reindexed after each wake"
+  exposure: none
+  classification:
+    category: data
+    use_cases: ["Trying index mappings and queries before changing production", "Search relevance experiments on a reindexable dataset"]
+parameters:
+  size: { type: string, enum: [small, medium], default: small }
+instances:
+  network: { component: aws-network-basic@1.0.0 }
+  egress:  { component: aws-nat-egress@1.0.0 }
+  search:  { component: aws-opensearch-domain@1.0.0, parameters: { size: "${param.size}" } }
+  bastion: { component: aws-ssm-bastion@1.0.0 }
+bindings:                     # from = requires side, to = provides side
+  - { from: egress.net,     to: network.net }
+  - { from: search.net,     to: network.net }
+  - { from: bastion.net,    to: network.net }
+  - { from: bastion.egress, to: egress.egress }
+supported_levels: [awake, deep, hibernate]

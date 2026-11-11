@@ -15,6 +15,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from . import controller, cost, drivers
+from .classify import classify
 from .desired import DEFAULT_POLICY, active_override, iso, manual_override, next_change, parse_ts
 from .ics import checker, static
 from .ics.catalog import load_bundle
@@ -204,7 +205,8 @@ def env_actions(env, lease, now):
 def _env_view(env, detail=True, lease=None):
     v = {k: env.get(k) for k in ("environment_id", "lease_id", "name", "host", "status", "actual", "desired",
                                  "desired_source", "override", "dns", "app_url", "blocked", "blocked_reason",
-                                 "active_operation_id", "last_activity_at", "awake_since", "observed_at")}
+                                 "active_operation_id", "last_activity_at", "awake_since", "observed_at",
+                                 "exposure")}
     v["availability"] = _availability(env)
     if detail:
         v["instances"] = env.get("instances")
@@ -214,6 +216,10 @@ def _env_view(env, detail=True, lease=None):
         v["operation"] = {k: op.get(k) for k in ("operation_id", "action", "target_level", "status", "requested_at", "started_at")}
     if lease is not None:
         t = _now()
+        if detail:
+            g = build_graph(controller.catalog(), lease["blueprint_ref"])
+            v["resources"] = [{"name": u, "billing_class": g.instances[u].billing_class,
+                               "data_class": g.instances[u].data_class} for u in _dependency_order(g)]
         v["actions"] = env_actions(env, lease, t)
         v["requested"] = pending_request(env, lease, t)
         v["next_change"] = next_change(lease, env, t)
@@ -221,7 +227,15 @@ def _env_view(env, detail=True, lease=None):
     return v
 
 
+def _dependency_order(g):
+    """Instances from the bottom of the dependency graph up (network first, entry last)."""
+    depth = g.depth()
+    return sorted(g.order, key=lambda u: (depth[u], u))
+
+
 def _public_url(env):
+    if env.get("exposure") == "none":
+        return None
     domain = os.environ.get("DOMAIN")
     if domain:
         return f"https://{env['host']}.{domain}"
@@ -256,8 +270,10 @@ def list_blueprints(event, me):
         out.append({"ref": ref, "summary": bp["blueprint"].get("summary"), "parameters": bp.get("parameters"),
                     "instances": {u: {"component": g.instances[u].component, "billing_class": g.instances[u].billing_class}
                                   for u in g.order},
-                    "supported_levels": list(g.supported_levels), "status": "CERTIFIED"})
-    return 200, {"items": out}
+                    "instance_order": _dependency_order(g),
+                    "supported_levels": list(g.supported_levels), "classification": classify(cat, ref),
+                    "status": "CERTIFIED"})
+    return 200, {"items": out, "categories": cat.registry.get("categories") or {}}
 
 
 def validate_blueprint(event, me):
@@ -358,6 +374,7 @@ def create_lease(event, me):
         ref = b.get("blueprint_ref", "web-db@1.0.0")
         if ref not in cat.blueprints:
             raise ApiError(400, "BLUEPRINT_NOT_CERTIFIED", f"blueprint {ref} is not in the catalog")
+        exposure = "public" if build_graph(cat, ref).dns_target else "none"
         starts, expires = parse_ts(b.get("starts_at")) or _now(), parse_ts(b.get("expires_at"))
         if expires is None or expires <= starts:
             raise ApiError(400, "INVALID_REQUEST", "expires_at must be later than starts_at")
@@ -391,7 +408,8 @@ def create_lease(event, me):
         for e in envs:
             env_id = f"{name}-{e}"
             store.put_env({"environment_id": env_id, "org_id": me["org_id"], "lease_id": lease_id, "name": e,
-                           "host": env_id, "name_prefix": env_id, "origin": "create", "status": "REQUESTED",
+                           "host": env_id, "name_prefix": env_id, "exposure": exposure, "origin": "create",
+                           "status": "REQUESTED",
                            "actual": "REQUESTED", "dns": "SLEEP", "blocked": False, "created_at": iso(t),
                            "capabilities": ["SLEEP", "WAKE", "RECLAIM"],
                            "tf_state_key": f"orgs/{me['org_id']}/envs/{env_id}/terraform.tfstate"})
@@ -489,10 +507,12 @@ def lease_cost(event, me, lease_id):
     start = parse_ts(q.get("from")) or parse_ts(l["created_at"])
     end = parse_ts(q.get("to")) or min(_now(), parse_ts(l["expires_at"]))
     size = (l.get("parameters") or {}).get("size", "small")
+    graph = build_graph(load_bundle(), l["blueprint_ref"])
     per_env = {}
     totals = {"always_on": 0.0, "stop_only": 0.0, "infraflow": 0.0}
     for e in store.list_envs(lease_id):
-        r = cost.scenarios(store.list_state_log(e["environment_id"]), start, end, size, l.get("activity_policy"))
+        r = cost.scenarios(graph, store.list_state_log(e["environment_id"]), start, end, size,
+                           l.get("activity_policy"))
         per_env[e["name"]] = r
         for k in totals:
             totals[k] = round(totals[k] + r[k], 4)
@@ -604,7 +624,8 @@ def _public_env(host):
     if env is None:
         raise ApiError(404, "NOT_FOUND", "Environment does not exist or has expired")
     lease = store.get_lease(env["lease_id"])
-    if env.get("status") == "RECLAIMED":
+    # A private Environment (exposure none) has no public URL; it answers like an unknown host.
+    if env.get("status") == "RECLAIMED" or env.get("exposure") == "none":
         raise ApiError(404, "NOT_FOUND", "Environment does not exist or has expired")
     return store, env, lease
 

@@ -333,7 +333,9 @@ def tagged_resources(tag_filters: list) -> list:
 
 def _is_final_backup(res: dict) -> bool:
     tags = {t["Key"]: t["Value"] for t in res.get("Tags", [])}
-    return ":snapshot:" in res["ResourceARN"] and tags.get("infraflow:purpose") in ("final-backup", "hibernate")
+    arn = res["ResourceARN"]
+    is_snapshot = ":snapshot:" in arn or ":snapshot/" in arn  # RDS and EC2 snapshot ARNs
+    return is_snapshot and tags.get("infraflow:purpose") in ("final-backup", "hibernate")
 
 
 def _verify(env: dict, lease: dict) -> dict:
