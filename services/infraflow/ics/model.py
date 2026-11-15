@@ -61,6 +61,7 @@ class Graph:
     dns_target: str | None  # instance providing http.public to sys.dns
     supported_levels: tuple
     bindings: list = field(default_factory=list)
+    params: dict = field(default_factory=dict)  # instance -> parameters as written in the blueprint
 
     # ---- graph ----
     def requires(self, u: str) -> set:
@@ -288,4 +289,5 @@ def build_graph(catalog, blueprint_ref: str | None = None, blueprint: dict | Non
         dns_target=dns_target,
         supported_levels=tuple(bp.get("supported_levels", ["awake", "deep"])),
         bindings=list(bp.get("bindings", [])),
+        params={name: dict(spec.get("parameters") or {}) for name, spec in bp["instances"].items()},
     )

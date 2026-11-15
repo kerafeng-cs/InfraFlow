@@ -35,7 +35,7 @@ docs/            Architecture, component standard, deployment, acceptance criter
 
 | Blueprint | Category | Exposure | Data | Use |
 |---|---|---|---|---|
-| `web-db` | web | public URL | persistent | Web application with PostgreSQL behind an ALB |
+| `web-db` | web | public URL | persistent | Web application with PostgreSQL behind an ALB; optionally Multi-AZ |
 | `web-db-cache` | web | public URL | persistent | Adds a Redis cache, removed in deep sleep |
 | `web-only` | web | public URL | stateless | Frontend or API preview without a database |
 | `web-ecs` | web | public URL | stateless | Container on ECS Fargate behind an ALB |
@@ -46,7 +46,7 @@ docs/            Architecture, component standard, deployment, acceptance criter
 | `search-sandbox` | data | private | ephemeral | OpenSearch domain, reindexed after each wake |
 | `ml-workbench` | ml | private | persistent | NVIDIA GPU instance with a data volume snapshotted on hibernation |
 
-Exposure, data and hourly cost are derived from the components, not declared; see [Classification](docs/component-standard.md#classification). Private environments are reached with SSM Session Manager port forwarding; see [Private environments](docs/deployment.md#7-private-environments).
+Environments are spread across the Availability Zones of the region. Exposure, data and hourly cost are derived from the components, not declared; see [Classification](docs/component-standard.md#classification). Private environments are reached with SSM Session Manager port forwarding; see [Private environments](docs/deployment.md#7-private-environments).
 
 ## Quick start
 

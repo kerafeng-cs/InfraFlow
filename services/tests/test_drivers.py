@@ -52,6 +52,16 @@ class FakeRDS:
         self.calls.append("start")
         self.seq = ["starting", "available"]
 
+    def describe_db_snapshots(self, DBSnapshotIdentifier):
+        if "snapshot" not in self.calls:
+            raise Exc()
+        return {"DBSnapshots": [{"Status": "available"}]}
+
+    def create_db_snapshot(self, DBSnapshotIdentifier, DBInstanceIdentifier, Tags):
+        if self.status != "available":
+            raise RuntimeError(f"InvalidDBInstanceStateFault: instance is {self.status}")
+        self.calls.append("snapshot")
+
 
 class FakeElastiCache:
     class exceptions:
@@ -169,6 +179,17 @@ class TestDrivers(unittest.TestCase):
         self.assertEqual(r["status"], "NOOP")
         self.assertEqual(rds.calls, ["stop"])
 
+    def test_rds_snapshot_starts_a_stopped_instance_first(self):
+        from unittest import mock
+        for status, want in (("available", ["snapshot"]), ("stopped", ["start", "snapshot"])):
+            rds, store = FakeRDS(status), FakeStore()
+            drivers.set_clients({"rds": rds})
+            with mock.patch("infraflow.store.get_store", return_value=store):
+                r = drivers.handler({"action": {"driver": "rds_instance.snapshot", "instance": "database"}, "ctx": CTX})
+            self.assertEqual(r["status"], "DONE", status)
+            self.assertEqual(rds.calls, want, status)
+            self.assertEqual(store.ops["op"]["snapshots"], {"database": "e-op"}, status)
+
     def test_rds_absent_vs_snapshotted(self):
         drivers.set_clients({"rds": FakeRDS(None)})
         self.assertEqual(drivers.rds_describe(CTX), "ABSENT")
@@ -192,6 +213,33 @@ class TestDrivers(unittest.TestCase):
         drivers.OBSERVE["ec2_workbench.describe"](CTX)
         drivers.OBSERVE["ec2_instance.describe"](CTX)
         self.assertEqual(sorted(set(names)), ["e-app", "e-bastion", "e-workbench"])
+
+    def test_ec2_drivers_treat_the_instances_of_a_role_as_one_unit(self):
+        class TwoInstances:
+            def __init__(self, states):
+                self.states = dict(states)
+                self.started, self.stopped = [], []
+
+            def describe_instances(self, Filters):
+                return {"Reservations": [{"Instances": [{"InstanceId": i, "State": {"Name": s}}
+                                                        for i, s in self.states.items()]}]}
+
+            def start_instances(self, InstanceIds):
+                self.started += InstanceIds
+                self.states.update({i: "running" for i in InstanceIds})
+
+            def stop_instances(self, InstanceIds):
+                self.stopped += InstanceIds
+                self.states.update({i: "stopped" for i in InstanceIds})
+
+        ec2 = TwoInstances({"i-a": "running", "i-b": "stopped"})
+        drivers.set_clients({"ec2": ec2})
+        self.assertEqual(drivers.ec2_describe(CTX), "STOPPED")      # not serving until both run
+        drivers.ec2_start(CTX, {})
+        self.assertEqual((ec2.started, drivers.ec2_describe(CTX)), (["i-b"], "RUNNING"))
+        drivers.ec2_stop(CTX, {})
+        self.assertEqual((sorted(ec2.stopped), drivers.ec2_describe(CTX)), (["i-a", "i-b"], "STOPPED"))
+        self.assertEqual(drivers.ec2_stop(CTX, {})["status"], "NOOP")
 
     def test_ebs_volume_snapshot_is_recorded_and_idempotent(self):
         from unittest import mock

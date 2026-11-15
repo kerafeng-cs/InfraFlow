@@ -55,14 +55,39 @@ def _component_prices(size: str) -> dict:
     }
 
 
+# availability = multi doubles what a component runs: two NAT Gateways, two application
+# instances, and RDS Multi-AZ (a standby instance and a second copy of the storage).
+MULTI_AZ_FACTOR = {"aws-nat-egress": 2, "aws-ec2-docker-app": 2, "aws-rds-postgres": 2}
+
+
+def resolve_params(graph, lease_params: dict | None) -> dict:
+    """instance -> its parameters, with ${param.x} replaced by the Lease value or the default."""
+    lease_params = lease_params or {}
+    out = {}
+    for u, raw in (getattr(graph, "params", None) or {}).items():
+        vals = {}
+        for k, v in raw.items():
+            if isinstance(v, str) and v.startswith("${param.") and v.endswith("}"):
+                v = lease_params.get(v[len("${param."):-1])
+            if v is not None:
+                vals[k] = v
+        out[u] = vals
+    return out
+
+
 class PriceModel:
     """Hourly price of each instance of a Blueprint, by state. Instances of billing class
     hourly_no_data are billed by the started hour for each continuous interval of existence."""
 
-    def __init__(self, graph, size: str = "small"):
+    def __init__(self, graph, size: str = "small", params: dict | None = None):
         table = _component_prices(size)
+        resolved = resolve_params(graph, {"size": size, **(params or {})})
         self.graph = graph
-        self.prices = {u: table.get(i.component.split("@", 1)[0], {}) for u, i in graph.instances.items()}
+        self.prices = {}
+        for u, i in graph.instances.items():
+            name = i.component.split("@", 1)[0]
+            factor = MULTI_AZ_FACTOR.get(name, 1) if resolved.get(u, {}).get("availability") == "multi" else 1
+            self.prices[u] = {state: rate * factor for state, rate in table.get(name, {}).items()}
         self.rounded = {u for u, i in graph.instances.items() if i.billing_class == "hourly_no_data"}
 
     def hourly(self, instance: str, state: str) -> float:
@@ -119,11 +144,11 @@ def _cost(intervals: dict, prices: PriceModel) -> float:
 
 
 def scenarios(graph, log: list, start: datetime, end: datetime, size: str = "small",
-              policy: dict | None = None) -> dict:
+              policy: dict | None = None, params: dict | None = None) -> dict:
     """always_on keeps the awake level; stop_only stops the stoppable instances outside the
     schedule and keeps everything else; infraflow replays the transition log."""
     policy = {**DEFAULT_POLICY, **(policy or {})}
-    prices = PriceModel(graph, size)
+    prices = PriceModel(graph, size, params)
     awake = graph.level_vector("awake")
     initial = graph.level_vector("prepared")
 

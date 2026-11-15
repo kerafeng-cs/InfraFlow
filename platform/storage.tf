@@ -54,10 +54,12 @@ data "archive_file" "code" {
   excludes    = ["tests/**", "**/__pycache__/**"]
 }
 
+# Provider binaries left by a local `terraform init` would add about 800 MB per component
 data "archive_file" "components" {
   type        = "zip"
   source_dir  = "${path.module}/../components"
   output_path = "${path.module}/.build/components.zip"
+  excludes    = ["**/.terraform/**", "**/.terraform.lock.hcl"]
 }
 
 resource "aws_s3_object" "code" {

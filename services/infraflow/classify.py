@@ -9,7 +9,9 @@ from the components it composes, so the classification cannot disagree with what
                every level), retained (kept while asleep, not backed up), ephemeral (lost on
                sleep), else stateless
 - sleep        the deepest supported level, and which billing classes the Blueprint contains
-- cost         estimated USD per hour at each supported level, for each size the Blueprint accepts
+- availability single, or single and multi when the Blueprint declares the parameter
+- cost         estimated USD per hour at each supported level, for each size the Blueprint accepts,
+               and for multi-AZ when it is offered
 """
 
 from __future__ import annotations
@@ -39,6 +41,14 @@ def classify(catalog, ref: str) -> dict:
     for size in sizes:
         prices = PriceModel(g, size)
         hourly[size] = {lv: prices.level(lv) for lv in levels}
+    # A Blueprint that declares availability can run in one AZ or in two; price both.
+    availability = list(((bp.get("parameters") or {}).get("availability") or {}).get("enum") or ["single"])
+    hourly_multi = None
+    if "multi" in availability:
+        hourly_multi = {}
+        for size in sizes:
+            prices = PriceModel(g, size, {"availability": "multi"})
+            hourly_multi[size] = {lv: prices.level(lv) for lv in levels}
     deepest = levels[-1]
     awake = hourly[sizes[0]]["awake"]
     classes = sorted({i.billing_class for i in g.instances.values()})
@@ -52,5 +62,7 @@ def classify(catalog, ref: str) -> dict:
         "deepest_level": deepest,
         "billing_classes": classes,
         "hourly_usd": hourly,
+        "availability": availability,
+        "hourly_usd_multi_az": hourly_multi,
         "asleep_saving_pct": round(100 * (1 - hourly[sizes[0]][deepest] / awake), 1) if awake else None,
     }

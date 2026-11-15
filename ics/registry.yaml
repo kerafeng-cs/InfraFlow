@@ -3,10 +3,10 @@
 ics_version: "0.1"
 
 port_types:
-  net.vpc/v1:            [vpc_id, public_subnet_ids, private_subnet_ids, private_route_table_id]
+  net.vpc/v1:            [vpc_id, public_subnet_ids, private_subnet_ids, private_route_table_id, private_route_table_ids]
   net.egress/v1:         [nat_gateway_id]
   db.postgres/v1:        [host, port, name, user, password_param, security_group_id]
-  http.backend/v1:       [instance_id, port, health_path, security_group_id]
+  http.backend/v1:       [instance_id, instance_ids, port, health_path, security_group_id]
   http.public/v1:        [dns_name, zone_id]
   cache.redis/v1:        [host, port, security_group_id]
   queue.sqs/v1:          [queue_url, queue_arn]

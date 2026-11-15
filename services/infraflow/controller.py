@@ -89,6 +89,8 @@ def tf_base_vars(lease: dict, env: dict) -> dict:
         "name_prefix": env["name_prefix"],
         "env_id": env["environment_id"],
         "size": params.get("size", "small"),
+        # every other Blueprint parameter of the Lease, for example availability
+        **{k: v for k, v in params.items() if k != "size"},
         "app_image": app.get("image", DEFAULT_APP["image"]),
         "app_port": int(app.get("port", DEFAULT_APP["port"])),
         "app_health_path": app.get("health_path", DEFAULT_APP["health_path"]),

@@ -316,6 +316,22 @@ def _level(pol, key):
     return v
 
 
+def _validate_params(bp: dict, given: dict) -> dict:
+    """Lease parameters are those the Blueprint declares: unknown names are rejected, missing ones
+    take the declared default, and enumerated values are checked."""
+    declared = bp.get("parameters") or {}
+    unknown = sorted(set(given) - set(declared))
+    if unknown:
+        raise ApiError(400, "INVALID_REQUEST", f"unknown parameter: {', '.join(unknown)}")
+    out = {}
+    for name, spec in declared.items():
+        value = given.get(name, spec.get("default"))
+        if spec.get("enum") and value not in spec["enum"]:
+            raise ApiError(400, "INVALID_REQUEST", f"{name} must be one of {', '.join(spec['enum'])}")
+        out[name] = value
+    return out
+
+
 def _validate_policy(pol):
     """Builds the stored policy from an allow-list of fields for the selected mode.
 
@@ -380,9 +396,7 @@ def create_lease(event, me):
             raise ApiError(400, "INVALID_REQUEST", "expires_at must be later than starts_at")
         if expires - starts > timedelta(days=MAX_LEASE_DAYS):
             raise ApiError(400, "ORG_LIMIT_EXCEEDED", f"the maximum Lease duration is {MAX_LEASE_DAYS} days")
-        size = (b.get("parameters") or {}).get("size", "small")
-        if size not in ("small", "medium"):
-            raise ApiError(400, "INVALID_REQUEST", "size must be small or medium")
+        params = _validate_params(cat.blueprint(ref), b.get("parameters") or {})
         app = b.get("app") or {}
         app = {"image": app.get("image", DEFAULT_APP["image"]), "port": int(app.get("port", DEFAULT_APP["port"])),
                "health_path": app.get("health_path", DEFAULT_APP["health_path"])}
@@ -399,7 +413,7 @@ def create_lease(event, me):
         t = _now()
         lease_id = "ls_" + secrets.token_hex(5)
         lease = {"lease_id": lease_id, "org_id": me["org_id"], "name": name, "manager_id": me["sub"], "version": 1,
-                 "blueprint_ref": ref, "parameters": {"size": size}, "app": app, "starts_at": iso(starts),
+                 "blueprint_ref": ref, "parameters": params, "app": app, "starts_at": iso(starts),
                  "expires_at": iso(expires), "activity_policy": policy,
                  "data_policy": {"keep_final_backup": bool(dp["keep_final_backup"]), "confirmed_by": me["sub"]},
                  "reclaim_requested": False, "created_at": iso(t)}
@@ -512,7 +526,7 @@ def lease_cost(event, me, lease_id):
     totals = {"always_on": 0.0, "stop_only": 0.0, "infraflow": 0.0}
     for e in store.list_envs(lease_id):
         r = cost.scenarios(graph, store.list_state_log(e["environment_id"]), start, end, size,
-                           l.get("activity_policy"))
+                           l.get("activity_policy"), l.get("parameters"))
         per_env[e["name"]] = r
         for k in totals:
             totals[k] = round(totals[k] + r[k], 4)

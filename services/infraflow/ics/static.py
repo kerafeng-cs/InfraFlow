@@ -180,8 +180,27 @@ def check_composition(bp: dict, catalog) -> list:
     if out:
         return out
 
+    # C5: parameters passed to an instance are declared by its component, with a valid value
+    bp_params = bp.get("parameters") or {}
+    for name, spec in instances.items():
+        declared = comps[name].get("parameters") or {}
+        for pname, pval in (spec.get("parameters") or {}).items():
+            if pname not in declared:
+                _err(out, "C5", f"{name}: component {spec['component']} has no parameter {pname}")
+                continue
+            if isinstance(pval, str) and pval.startswith("${param.") and pval.endswith("}"):
+                ref = pval[len("${param."):-1]
+                if ref not in bp_params:
+                    _err(out, "C5", f"{name}.{pname} refers to undeclared blueprint parameter {ref}")
+                elif set(bp_params[ref].get("enum") or []) - set(declared[pname].get("enum") or bp_params[ref].get("enum") or []):
+                    _err(out, "C5", f"{name}.{pname}: blueprint parameter {ref} allows values the component does not")
+            elif declared[pname].get("enum") and pval not in declared[pname]["enum"]:
+                _err(out, "C5", f"{name}.{pname} = {pval} is not one of {declared[pname]['enum']}")
+
     provides = {(i, p["port"]): p["type"] for i, m in comps.items() for p in (m.get("provides") or [])}
     provides[("sys", "lease_app")] = "workload.container/v1"
+    attrs = {(i, p["port"]): set((p.get("attributes") or {}).keys()) for i, m in comps.items() for p in (m.get("provides") or [])}
+    attrs[("sys", "lease_app")] = {"image", "port", "health_path"}
     bound: dict = {}
     dns_bindings = 0
     edges = set()
@@ -213,6 +232,9 @@ def check_composition(bp: dict, catalog) -> list:
             continue
         if ptype != req["type"]:
             _err(out, "C2", f"{b['from']} requires {req['type']} but {b['to']} is {ptype}")
+        missing = set((req.get("inputs") or {}).keys()) - attrs.get((ti, tp), set())
+        if missing:
+            _err(out, "C2", f"{b['from']} reads {', '.join(sorted(missing))}, which {b['to']} does not provide")
         if ti != "sys":
             edges.add((fi, ti))
 

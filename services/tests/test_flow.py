@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from infraflow import api, controller, drivers
 from infraflow.ics.model import build_graph
-from infraflow.store import MemoryStore, set_store
+from infraflow.store import MemoryStore, get_store, set_store
 
 T0 = datetime(2026, 11, 2, 2, 0, tzinfo=timezone.utc)  # 09:00 Monday local time
 
@@ -139,6 +139,24 @@ class Flow(unittest.TestCase):
         self.assertEqual(st, 200)
         tot = b["totals"]
         self.assertGreater(tot["always_on"], tot["infraflow"])
+
+    def test_lease_parameters_follow_the_blueprint(self):
+        def create(key, **over):
+            body = {"environments": ["dev"], "expires_at": "2027-01-01T00:00:00Z", "starts_at": "2026-11-01T00:00:00Z",
+                    "data_policy": {"keep_final_backup": True}, **over}
+            return self.call("POST", "/v1/leases", body, key=key)
+
+        st, b = create("p1", name="ha", blueprint_ref="web-db@1.1.0", parameters={"availability": "multi"})
+        self.assertEqual(st, 202)
+        lease = get_store().get_lease(b["lease_id"])
+        self.assertEqual(lease["parameters"], {"size": "small", "availability": "multi"})
+        env = get_store().list_envs(b["lease_id"])[0]
+        self.assertEqual(controller.tf_base_vars(lease, env)["availability"], "multi")
+        # A Blueprint without the parameter does not accept it; enumerated values are checked
+        st, e = create("p2", name="ha2", blueprint_ref="web-db@1.0.0", parameters={"availability": "multi"})
+        self.assertEqual((st, e["error"]["code"]), (400, "INVALID_REQUEST"))
+        st, e = create("p3", name="ha3", blueprint_ref="web-db@1.1.0", parameters={"availability": "triple"})
+        self.assertEqual((st, e["error"]["code"]), (400, "INVALID_REQUEST"))
 
     def test_private_blueprint_has_no_public_url(self):
         st, body = self.create(name="jobs", environments=["dev"], blueprint_ref="worker-cache@1.0.0")

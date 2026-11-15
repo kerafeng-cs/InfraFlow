@@ -299,13 +299,13 @@
     {
       return { text: "Reclaimed", tone: "neutral" };
     }
-    if (env.status === "VERIFYING")
-    {
-      return { text: "Verifying removal", tone: "changing" };
-    }
     if (env.blocked)
     {
       return { text: "Blocked", tone: "danger" };
+    }
+    if (env.status === "VERIFYING")
+    {
+      return { text: "Verifying removal", tone: "changing" };
     }
     if (env.active_operation_id)
     {
@@ -887,10 +887,44 @@
     return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(3)}`;
   }
 
-  function blueprint_card(bp, size, checked)
+  // A Blueprint keeps its old versions for the Leases pinned to them; new Leases get the latest.
+  function latest_versions(items)
+  {
+    const semver = (ref) => ref.split("@")[1].split(".").map(Number);
+    const newer = (a, b) =>
+    {
+      const [x, y] = [semver(a.ref), semver(b.ref)];
+      for (let i = 0; i < 3; i += 1)
+      {
+        if (x[i] !== y[i])
+        {
+          return x[i] > y[i];
+        }
+      }
+      return false;
+    };
+    const by_name = new Map();
+    for (const bp of items)
+    {
+      const name = bp.ref.split("@")[0];
+      if (!by_name.has(name) || newer(bp, by_name.get(name)))
+      {
+        by_name.set(name, bp);
+      }
+    }
+    return [...by_name.values()];
+  }
+
+  function offers_multi_az(bp)
+  {
+    return (bp.classification.availability || []).includes("multi");
+  }
+
+  function blueprint_card(bp, size, checked, multi_az)
   {
     const c = bp.classification;
-    const hourly = c.hourly_usd[size] || c.hourly_usd.small;
+    const table = multi_az && offers_multi_az(bp) ? c.hourly_usd_multi_az : c.hourly_usd;
+    const hourly = table[size] || table.small;
     const [data_label, data_help] = DATA_LABELS[c.data] || [c.data, ""];
     const [name, version] = bp.ref.split("@");
     return html`<label class="bp-card">
@@ -901,6 +935,7 @@
         <span class="tag">${CATEGORY_LABELS[c.category] || c.category}</span>
         <span class="tag" title="${c.exposure === "public" ? "Served on a public URL with a sleeping page" : "No public URL; reachable inside its own network only"}">${c.exposure === "public" ? "Public URL" : "Private"}</span>
         <span class="tag" title="${data_help}">${data_label}</span>
+        ${offers_multi_az(bp) ? html`<span class="tag" title="Can run in one Availability Zone or in two">${multi_az ? "Multi-AZ" : "Multi-AZ option"}</span>` : ""}
       </span>
       <span class="bp-parts mono">${(bp.instance_order || Object.keys(bp.instances)).join(" / ")}</span>
       <span class="bp-cost">
@@ -926,12 +961,17 @@
           <div class="bp-filter" id="lf-bp-filter" role="group" aria-label="Filter by category"></div>
           <div class="bp-grid" id="lf-bp-list" tabindex="-1" role="radiogroup" aria-label="Blueprint"><p class="muted">Loading the catalog...</p></div>
           <p class="help bp-note">Estimated USD per hour in ap-southeast-1 at the selected size, awake and at the deepest sleep level the blueprint supports.</p>
+          <div class="field" id="lf-availability-field" hidden>
+            <label for="lf-availability">Availability</label>
+            <select id="lf-availability"><option value="single">Single AZ</option><option value="multi">Multi-AZ</option></select>
+            <span class="help">Multi-AZ runs a NAT Gateway and an application instance in each of two Availability Zones and RDS Multi-AZ, so losing one zone does not stop the Environment. It roughly doubles the awake cost; the asleep cost changes little.</span>
+          </div>
         </fieldset>
 
         <fieldset><legend>Environments</legend>
           <div class="repeat-list" id="lf-envs"></div>
           <br>
-          <div class="btn-row"><button type="button" class="btn sm" id="lf-add-env">Add environment</button><span class="help">Up to ${MAX_ENVS}. Each name is 1 to 8 lowercase letters or digits. Every Environment is a separate copy of the blueprint.</span></div>
+          <div class="btn-row"><button type="button" class="btn sm" id="lf-add-env">Add environment</button><span class="help">Up to ${MAX_ENVS}, for example dev, staging, test or preview. Each name is 1 to 8 lowercase letters or digits. Every Environment is a separate copy of the blueprint.</span></div>
         </fieldset>
 
         <fieldset><legend>Lifetime</legend><div class="fields">
@@ -974,7 +1014,7 @@
     {
       const row = document.createElement("div");
       row.className = "repeat-row";
-      mount(row, html`<input id="lf-env-${crypto.randomUUID().slice(0, 8)}" maxlength="8" spellcheck="false" autocomplete="off" value="${value}" placeholder="qa"><button type="button" class="btn sm ghost">Remove</button>`);
+      mount(row, html`<input id="lf-env-${crypto.randomUUID().slice(0, 8)}" maxlength="8" spellcheck="false" autocomplete="off" value="${value}" placeholder="staging"><button type="button" class="btn sm ghost">Remove</button>`);
       row.querySelector("button").onclick = () =>
       {
         row.remove();
@@ -985,7 +1025,7 @@
       return row.querySelector("input");
     };
     $("lf-add-env").onclick = () => add_env("").focus();
-    add_env("qa");
+    add_env("dev");
     bind_policy($("lf-policy"), "lf");
     form.addEventListener("input", () => clear_form_error(form));
 
@@ -1015,28 +1055,35 @@
       $("lf-app").hidden = Boolean(bp) && !bp.classification.workload;
       $("lf-health-field").hidden = Boolean(bp) && bp.classification.exposure !== "public";
       $("lf-private-help").hidden = !bp || bp.classification.exposure === "public";
+      $("lf-availability-field").hidden = !bp || !offers_multi_az(bp);
     };
+    const multi_az = () => !$("lf-availability-field").hidden && $("lf-availability").value === "multi";
     const render_blueprints = () =>
     {
       const size = $("lf-size").value;
       const current = form.querySelector("input[name=lf-bp]:checked")?.value;
       const shown = blueprints.filter((b) => category === "all" || b.classification.category === category);
-      mount($("lf-bp-list"), shown.length ? html`${shown.map((b) => blueprint_card(b, size, b.ref === current))}` : html`<p class="muted">No blueprint in this category yet.</p>`);
+      mount($("lf-bp-list"), shown.length ? html`${shown.map((b) => blueprint_card(b, size, b.ref === current, b.ref === current && multi_az()))}` : html`<p class="muted">No blueprint in this category yet.</p>`);
       if (!form.querySelector("input[name=lf-bp]:checked") && shown.length)
       {
         form.querySelector("input[name=lf-bp]").checked = true;
       }
       sync_blueprint();
     };
-    $("lf-bp-list").addEventListener("change", sync_blueprint);
+    $("lf-bp-list").addEventListener("change", () =>
+    {
+      sync_blueprint();
+      render_blueprints();
+    });
     $("lf-size").addEventListener("change", render_blueprints);
+    $("lf-availability").addEventListener("change", render_blueprints);
 
     try
     {
       const catalog = await api("GET", "/v1/catalog/blueprints");
       // Web first, ML last; by name within a category
       const rank = (c) => Object.keys(CATEGORY_LABELS).indexOf(c);
-      blueprints = (catalog.items || []).sort((a, b) => rank(a.classification.category) - rank(b.classification.category) || a.ref.localeCompare(b.ref));
+      blueprints = latest_versions(catalog.items || []).sort((a, b) => rank(a.classification.category) - rank(b.classification.category) || a.ref.localeCompare(b.ref));
       const counts = {};
       for (const b of blueprints)
       {
@@ -1107,7 +1154,7 @@
       const body = {
         name,
         blueprint_ref: blueprint,
-        parameters: { size: $("lf-size").value },
+        parameters: { size: $("lf-size").value, ...(offers_multi_az(bp) ? { availability: multi_az() ? "multi" : "single" } : {}) },
         environments: names,
         starts_at: start.toISOString(),
         expires_at: end.toISOString(),
@@ -1158,7 +1205,7 @@
       }
       const ok = await confirm_dialog("Create this Lease?", html`<dl class="facts">
         <dt>Name</dt><dd>${body.name}</dd>
-        <dt>Blueprint</dt><dd>${body.blueprint_ref}, ${body.parameters.size}</dd>
+        <dt>Blueprint</dt><dd>${body.blueprint_ref}, ${body.parameters.size}${body.parameters.availability === "multi" ? ", Multi-AZ" : ""}</dd>
         <dt>Environments</dt><dd>${body.environments.join(", ")}</dd>
         <dt>Lifetime</dt><dd>${when(body.starts_at)} to ${when(body.expires_at)}</dd>
         ${body.app ? html`<dt>Application</dt><dd><code>${body.app.image}</code>, port ${body.app.port}${selected_blueprint().classification.exposure === "public" ? html`, health <code>${body.app.health_path}</code>` : ""}</dd>` : ""}
@@ -1205,7 +1252,7 @@
     const keep = (lease.data_policy || {}).keep_final_backup;
     const app = lease.app || {};
     mount(view, html`<div class="crumbs"><a href="#/">Environments</a> / Lease</div>
-      <div class="page-head"><div><h1>${lease.name}</h1><p class="sub">${lease.blueprint_ref}, ${(lease.parameters || {}).size}. ${lease.environments.length} Environment${lease.environments.length === 1 ? "" : "s"}.</p></div></div>
+      <div class="page-head"><div><h1>${lease.name}</h1><p class="sub">${lease.blueprint_ref}, ${(lease.parameters || {}).size}${(lease.parameters || {}).availability === "multi" ? ", Multi-AZ" : ""}. ${lease.environments.length} Environment${lease.environments.length === 1 ? "" : "s"}.</p></div></div>
       <div class="panel"><div class="panel-head"><h2>Environments</h2></div><div id="lease-envs"></div></div>
       <div class="grid-2">
         <div class="panel"><div class="panel-head"><h2>Settings</h2></div>

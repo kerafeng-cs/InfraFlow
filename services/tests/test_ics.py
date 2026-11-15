@@ -294,18 +294,21 @@ class TestClassification(unittest.TestCase):
     def test_derived_axes(self):
         from infraflow.classify import classify
         got = {r: classify(CAT, r) for r in CAT.blueprints}
-        self.assertEqual({r: (c["category"], c["exposure"], c["data"]) for r, c in got.items()}, {
-            "web-db@1.0.0": ("web", "public", "persistent"),
-            "web-db-cache@1.0.0": ("web", "public", "persistent"),
-            "web-only@1.0.0": ("web", "public", "stateless"),
-            "worker-db@1.0.0": ("worker", "none", "persistent"),
-            "worker-cache@1.0.0": ("worker", "none", "ephemeral"),
-            "web-ecs@1.0.0": ("web", "public", "stateless"),
-            "queue-worker@1.0.0": ("worker", "none", "retained"),
-            "postgres-sandbox@1.0.0": ("data", "none", "persistent"),
-            "search-sandbox@1.0.0": ("data", "none", "ephemeral"),
-            "ml-workbench@1.0.0": ("ml", "none", "persistent"),
-        })
+        want = {
+            "web-db": ("web", "public", "persistent"),
+            "web-db-cache": ("web", "public", "persistent"),
+            "web-only": ("web", "public", "stateless"),
+            "worker-db": ("worker", "none", "persistent"),
+            "worker-cache": ("worker", "none", "ephemeral"),
+            "web-ecs": ("web", "public", "stateless"),
+            "queue-worker": ("worker", "none", "retained"),
+            "postgres-sandbox": ("data", "none", "persistent"),
+            "search-sandbox": ("data", "none", "ephemeral"),
+            "ml-workbench": ("ml", "none", "persistent"),
+        }
+        # Every version of a Blueprint has the same classification
+        self.assertEqual({r: (c["category"], c["exposure"], c["data"]) for r, c in got.items()},
+                         {r: want[r.split("@")[0]] for r in got})
         for r, c in got.items():
             small, medium = c["hourly_usd"]["small"], c["hourly_usd"]["medium"]
             self.assertGreater(small["awake"], small["deep"], r)
@@ -320,6 +323,60 @@ class TestClassification(unittest.TestCase):
         self.assertEqual(cached.level("deep"), web_db.level("deep"))  # the cache is removed in deep
         self.assertIn("cache", cached.rounded)
         self.assertNotIn("app", cached.rounded)
+
+
+class TestAvailability(unittest.TestCase):
+    """web-db@1.1.0 runs in one AZ or two, chosen by the availability parameter."""
+
+    def test_parameter_reaches_the_components_but_not_the_graph(self):
+        src = compiler.compile_main(CAT, "web-db@1.1.0", "../../../components")
+        self.assertIn('variable "availability"', src)
+        for inst in ("egress", "database", "app"):
+            block = src[src.index(f'module "{inst}"'):]
+            block = block[:block.index("\n}\n")]
+            self.assertRegex(block, r"availability += var\.availability", inst)
+        net = src[src.index('module "network"'):]
+        self.assertRegex(net[:net.index("\n}\n")], r"env_id += var\.env_id")
+        g1, g0 = build_graph(CAT, "web-db@1.1.0"), build_graph(CAT, "web-db@1.0.0")
+        self.assertEqual((g1.present_edges, g1.serving_edges), (g0.present_edges, g0.serving_edges))
+
+    def test_multi_az_doubles_nat_application_and_database(self):
+        from infraflow.cost import PriceModel, PRICES
+        g = build_graph(CAT, "web-db@1.1.0")
+        single, multi = PriceModel(g, "small"), PriceModel(g, "small", {"availability": "multi"})
+        p = PRICES
+        doubled = (p["nat_gateway_hour"] + p["public_ipv4_hour"] + p["ec2_hour"]["small"] + p["ebs_hour"]
+                   + p["rds_hour"]["small"] + p["rds_storage_hour"])
+        self.assertAlmostEqual(multi.level("awake") - single.level("awake"), doubled, places=3)
+        self.assertAlmostEqual(multi.hourly("entry", "PRESENT"), single.hourly("entry", "PRESENT"))
+        from infraflow.classify import classify
+        c = classify(CAT, "web-db@1.1.0")
+        self.assertEqual(c["availability"], ["single", "multi"])
+        self.assertGreater(c["hourly_usd_multi_az"]["small"]["awake"], c["hourly_usd"]["small"]["awake"])
+        self.assertIsNone(classify(CAT, "web-db@1.0.0")["hourly_usd_multi_az"])
+
+    def test_parameters_must_be_declared_and_valid(self):
+        bp = copy.deepcopy(CAT.blueprint("web-db@1.1.0"))
+        bp["instances"]["entry"]["parameters"] = {"availability": "multi"}
+        self.assertEqual([e["code"] for e in static.check_composition(bp, CAT)], ["C5"])
+        bp = copy.deepcopy(CAT.blueprint("web-db@1.1.0"))
+        bp["instances"]["egress"]["parameters"] = {"availability": "triple"}
+        self.assertEqual([e["code"] for e in static.check_composition(bp, CAT)], ["C5"])
+        bp = copy.deepcopy(CAT.blueprint("web-db@1.1.0"))
+        del bp["parameters"]["availability"]
+        self.assertEqual({e["code"] for e in static.check_composition(bp, CAT)}, {"C5"})
+
+    def test_consumer_cannot_read_an_attribute_the_provider_lacks(self):
+        bp = copy.deepcopy(CAT.blueprint("web-db@1.0.0"))
+        bp["instances"]["entry"]["component"] = "aws-alb-https-entry@1.1.0"   # reads instance_ids
+        errs = static.check_composition(bp, CAT)                             # app 1.0.0 has only instance_id
+        self.assertEqual([e["code"] for e in errs], ["C2"])
+        self.assertIn("instance_ids", errs[0]["message"])
+
+    def test_network_spreads_environments_across_zones(self):
+        tf = (ROOT / "components/aws-network-basic/1.1.0/main.tf").read_text()
+        self.assertIn("sha1(var.env_id)", tf)
+        self.assertIn("all_availability_zones = true", tf)
 
 
 class TestValidator(unittest.TestCase):

@@ -28,16 +28,41 @@ jobs:
 
   terraform:
     runs-on: ubuntu-latest
+    env:
+      # One provider download for all module directories instead of one per directory: fewer
+      # downloads that a network reset can break, and no 800 MB copy of the AWS provider each.
+      # The lock files record the Windows h1 checksum only, so the cache needs explicit permission.
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/../plugin-cache
+      TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.10.5"
+          terraform_wrapper: false
+      - run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
       - run: terraform fmt -check -recursive components platform
-      - name: validate component
+      - name: validate components and platform
         run: |
-          for d in components/*/*/; do
-            echo "== $d"; terraform -chdir="$d" init -backend=false -input=false >/dev/null && terraform -chdir="$d" validate
+          failed=0
+          for d in components/*/*/ platform/; do
+            echo "== $d"
+            ok=0
+            for attempt in 1 2 3; do
+              if terraform -chdir="$d" init -backend=false -input=false -no-color > "$RUNNER_TEMP/init.log" 2>&1; then
+                ok=1
+                break
+              fi
+              echo "init failed (attempt $attempt), retrying"
+              sleep 10
+            done
+            if [ "$ok" -eq 0 ]; then
+              cat "$RUNNER_TEMP/init.log"
+              failed=1
+            elif ! terraform -chdir="$d" validate -no-color; then
+              failed=1
+            fi
+            rm -rf "${d}.terraform"
           done
-      - name: validate platform
-        run: terraform -chdir=platform init -backend=false -input=false >/dev/null && terraform -chdir=platform validate
+          df -h /
+          exit $failed

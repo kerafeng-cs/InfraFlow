@@ -109,6 +109,23 @@ supported_levels: [awake, deep, hibernate]
 
 Two system ports exist: `sys.lease_app` provides `workload.container/v1` (image, port, health path) from the Lease, and `sys.dns` requires the `http.public/v1` port that the environment URL points to.
 
+### Parameters and versions
+
+Blueprint `parameters` are chosen per Lease and passed to instances as `"${param.<name>}"`. The API accepts only the parameters a blueprint declares, fills in defaults and checks enumerated values; C5 checks that each instance receives only parameters its component declares, with values it accepts.
+
+A parameter may change how many resources a component creates, but never the dependency graph or the levels. The model checker certifies the graph once and the result holds for every parameter value. `availability` is the example:
+
+| Value | `aws-nat-egress@1.1.0` | `aws-ec2-docker-app@1.2.0` | `aws-rds-postgres@1.1.0` |
+|---|---|---|---|
+| `single` (default) | One NAT Gateway for both private subnets | One instance | Single-AZ |
+| `multi` | One NAT Gateway per AZ, each private subnet routed to its own | One instance per AZ, both registered with the ALB | Multi-AZ |
+
+`web-db@1.1.0` declares `availability`; the console offers the Multi-AZ choice only for blueprints that declare it, and prices both choices. Drivers treat the instances of one component as a unit: it is `RUNNING` only when every instance runs.
+
+Independently of `availability`, `aws-network-basic@1.1.0` chooses the two Availability Zones of an Environment from a hash of `env_id`, so Environments are spread across the zones of the region and an AZ outage affects only some of them. The zone list is read without a state filter, so it does not change while a zone is impaired.
+
+Published versions are immutable. A Lease is pinned to the blueprint version it was created with; changing a component creates a new component version and a new blueprint version, and the console offers only the latest version of each blueprint. The `1.1.0` blueprints differ from `1.0.0` by the network and NAT components above.
+
 ### Classification
 
 A blueprint declares only its category. The other axes are derived from its components by `services/infraflow/classify.py`, so they cannot disagree with what is deployed. `python -m infraflow.cli catalog` prints them, and `GET /v1/catalog/blueprints` returns them to the console.
@@ -120,22 +137,23 @@ A blueprint declares only its category. The other axes are derived from its comp
 | Data | `persistent`, `retained`, `ephemeral`, `stateless` | The strongest data class among its components. |
 | Workload | yes, no | Whether an instance runs the Lease's container image (binds `sys.lease_app`). The console asks for an image only when it does. |
 | Deepest level | `deep`, `hibernate` | `supported_levels`. |
-| Hourly cost | USD per hour at each supported level, per size | Unit prices of each component in each state (`cost.py`). |
+| Availability | `single`, or `single` and `multi` | Whether the blueprint declares the `availability` parameter. |
+| Hourly cost | USD per hour at each supported level, per size, and for Multi-AZ when offered | Unit prices of each component in each state (`cost.py`); Multi-AZ doubles the NAT Gateway, application and database. |
 
-Current catalog:
+Current catalog (latest versions):
 
-| Blueprint | Category | Exposure | Data | Instances |
-|---|---|---|---|---|
-| `web-db@1.0.0` | web | public | persistent | network, database, egress, app, entry |
-| `web-db-cache@1.0.0` | web | public | persistent | network, cache, database, egress, app, entry |
-| `web-only@1.0.0` | web | public | stateless | network, egress, app, entry |
-| `web-ecs@1.0.0` | web | public | stateless | network, egress, entry, service |
-| `worker-db@1.0.0` | worker | none | persistent | network, database, egress, app |
-| `worker-cache@1.0.0` | worker | none | ephemeral | network, cache, egress, app |
-| `queue-worker@1.0.0` | worker | none | retained | network, queue, egress, app |
-| `postgres-sandbox@1.0.0` | data | none | persistent | network, database, egress, bastion |
-| `search-sandbox@1.0.0` | data | none | ephemeral | network, egress, search, bastion |
-| `ml-workbench@1.0.0` | ml | none | persistent | network, egress, volume, workbench |
+| Blueprint | Category | Exposure | Data | Multi-AZ | Instances |
+|---|---|---|---|---|---|
+| `web-db@1.1.0` | web | public | persistent | yes | network, database, egress, app, entry |
+| `web-db-cache@1.1.0` | web | public | persistent | no | network, cache, database, egress, app, entry |
+| `web-only@1.1.0` | web | public | stateless | no | network, egress, app, entry |
+| `web-ecs@1.1.0` | web | public | stateless | no | network, egress, entry, service |
+| `worker-db@1.1.0` | worker | none | persistent | no | network, database, egress, app |
+| `worker-cache@1.1.0` | worker | none | ephemeral | no | network, cache, egress, app |
+| `queue-worker@1.1.0` | worker | none | retained | no | network, queue, egress, app |
+| `postgres-sandbox@1.1.0` | data | none | persistent | no | network, database, egress, bastion |
+| `search-sandbox@1.1.0` | data | none | ephemeral | no | network, egress, search, bastion |
+| `ml-workbench@1.1.0` | ml | none | persistent | no | network, egress, volume, workbench |
 
 Design notes on the newer blueprints:
 
@@ -164,10 +182,10 @@ S2 (Terraform `validate` on the module) runs in CI. S8 (conformance tests agains
 | Check | Statement |
 |---|---|
 | C1 | Every binding refers to existing instances and ports; every port that is not optional has exactly one binding. |
-| C2 | Bound ports have the same type; `sys.dns` binds to `http.public/v1`. |
+| C2 | Bound ports have the same type, and every attribute the consumer reads is provided; `sys.dns` binds to `http.public/v1`. |
 | C3 | The dependency graph is acyclic. |
 | C4 | `exposure` is `public` or `none`; a public blueprint has exactly one binding to `sys.dns`, a private one has none. |
-| C5 | Every referenced component exists in the catalog. |
+| C5 | Every referenced component exists in the catalog; every parameter passed to an instance is declared by its component, with a value or a blueprint parameter it accepts. |
 | C6 | Every instance supports every level the blueprint declares. |
 | M1 | `classification.category` is in the registry. |
 

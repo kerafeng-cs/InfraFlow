@@ -68,22 +68,26 @@ def nat_describe(ctx) -> str:
     return PRESENT if r["NatGateways"] else ABSENT
 
 
-def _ec2_instance(ctx, role: str = "app"):
-    """EC2 instances are named <name_prefix>-<role>: app, bastion or workbench."""
+def _ec2_instances(ctx, role: str = "app") -> list:
+    """EC2 instances are named <name_prefix>-<role> (app, bastion or workbench). A component with
+    availability = multi has one instance per AZ under the same name; they are handled as one unit."""
     r = aws("ec2").describe_instances(Filters=_env_filter(ctx) + [
         {"Name": "tag:Name", "Values": [f"{ctx['name_prefix']}-{role}"]},
         {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}])
-    for res in r["Reservations"]:
-        for i in res["Instances"]:
-            return i
-    return None
+    return [i for res in r["Reservations"] for i in res["Instances"]]
+
+
+def _ec2_states(ctx, role: str) -> list:
+    return [i["State"]["Name"] for i in _ec2_instances(ctx, role)]
 
 
 def ec2_describe(ctx, role: str = "app") -> str:
-    i = _ec2_instance(ctx, role)
-    if i is None:
+    """RUNNING only when every instance runs; a partly started unit is not serving, so it is STOPPED
+    and the next reconciliation starts the rest."""
+    states = _ec2_states(ctx, role)
+    if not states:
         return ABSENT
-    return RUNNING if i["State"]["Name"] in ("pending", "running") else STOPPED
+    return RUNNING if all(s in ("pending", "running") for s in states) else STOPPED
 
 
 def _rds(ctx):
@@ -210,41 +214,43 @@ def observe_all(graph, ctx) -> dict:
 # ---------------------------------------------------------------------------
 
 def ec2_start(ctx, action, role: str = "app"):
-    i = _ec2_instance(ctx, role)
-    if i is None:
+    insts = _ec2_instances(ctx, role)
+    if not insts:
         raise DriverError(f"EC2 instance {role} not found")
-    if i["State"]["Name"] in ("stopping",):
-        _poll(lambda: _ec2_instance(ctx, role)["State"]["Name"], lambda s: s == "stopped", "EC2 stopped")
-    if _ec2_instance(ctx, role)["State"]["Name"] != "running":
-        aws("ec2").start_instances(InstanceIds=[i["InstanceId"]])
-        _poll(lambda: _ec2_instance(ctx, role)["State"]["Name"], lambda s: s == "running", "EC2 running")
-        return {"status": "DONE", "observed_state": RUNNING}
-    return {"status": "NOOP", "observed_state": RUNNING}
+    if any(i["State"]["Name"] == "stopping" for i in insts):
+        _poll(lambda: _ec2_states(ctx, role), lambda st: "stopping" not in st, "EC2 stopped")
+    to_start = [i["InstanceId"] for i in _ec2_instances(ctx, role) if i["State"]["Name"] == "stopped"]
+    if not to_start:
+        return {"status": "NOOP", "observed_state": RUNNING}
+    aws("ec2").start_instances(InstanceIds=to_start)
+    _poll(lambda: _ec2_states(ctx, role), lambda st: all(s == "running" for s in st), "EC2 running")
+    return {"status": "DONE", "observed_state": RUNNING}
 
 
 def ec2_stop(ctx, action, role: str = "app"):
-    i = _ec2_instance(ctx, role)
-    if i is None:
+    insts = _ec2_instances(ctx, role)
+    if not insts:
         return {"status": "NOOP", "observed_state": ABSENT}
-    if i["State"]["Name"] in ("running", "pending"):
-        aws("ec2").stop_instances(InstanceIds=[i["InstanceId"]])
-    elif i["State"]["Name"] == "stopped":
+    to_stop = [i["InstanceId"] for i in insts if i["State"]["Name"] in ("running", "pending")]
+    if not to_stop and all(i["State"]["Name"] == "stopped" for i in insts):
         return {"status": "NOOP", "observed_state": STOPPED}
-    _poll(lambda: _ec2_instance(ctx, role)["State"]["Name"], lambda s: s == "stopped", "EC2 stopped")
+    if to_stop:
+        aws("ec2").stop_instances(InstanceIds=to_stop)
+    _poll(lambda: _ec2_states(ctx, role), lambda st: all(s == "stopped" for s in st), "EC2 stopped")
     return {"status": "DONE", "observed_state": STOPPED}
 
 
 def ec2_status_ok(ctx, action, role: str = "app"):
-    i = _ec2_instance(ctx, role)
-    if i is None:
+    ids = [i["InstanceId"] for i in _ec2_instances(ctx, role)]
+    if not ids:
         raise DriverError(f"EC2 instance {role} not found")
 
-    def st():
-        r = aws("ec2").describe_instance_status(InstanceIds=[i["InstanceId"]])
-        s = r["InstanceStatuses"]
-        return s[0]["InstanceStatus"]["Status"] if s else "pending"
+    def statuses():
+        r = aws("ec2").describe_instance_status(InstanceIds=ids)
+        got = {x["InstanceId"]: x["InstanceStatus"]["Status"] for x in r["InstanceStatuses"]}
+        return [got.get(i, "pending") for i in ids]
 
-    _poll(st, lambda s: s == "ok", "EC2 status ok")
+    _poll(statuses, lambda st: all(s == "ok" for s in st), "EC2 status ok")
     return {"status": "DONE"}
 
 
@@ -295,8 +301,13 @@ def rds_snapshot(ctx, action):
     except rds.exceptions.DBSnapshotNotFoundFault:
         exists = False
     if not exists:
-        if db["DBInstanceStatus"] not in ("available", "stopped"):
+        # CreateDBSnapshot requires the instance to be available. At deep sleep the instance is
+        # stopped, so Hibernate and Reclaim from deep start it first; the next step removes it.
+        if db["DBInstanceStatus"] != "available":
             _poll(lambda: _rds(ctx)["DBInstanceStatus"], lambda s: s in ("available", "stopped"), "RDS to settle", interval=20)
+            if _rds(ctx)["DBInstanceStatus"] == "stopped":
+                rds.start_db_instance(DBInstanceIdentifier=db["DBInstanceIdentifier"])
+                _poll(lambda: _rds(ctx)["DBInstanceStatus"], lambda s: s == "available", "RDS available", interval=20)
         rds.create_db_snapshot(DBSnapshotIdentifier=snap_id, DBInstanceIdentifier=db["DBInstanceIdentifier"],
                                Tags=[{"Key": "infraflow:env_id", "Value": ctx["environment_id"]},
                                      {"Key": "infraflow:managed", "Value": "true"},
