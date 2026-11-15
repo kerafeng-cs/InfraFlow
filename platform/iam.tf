@@ -52,7 +52,10 @@ resource "aws_iam_role_policy" "ops" {
       {
         Effect = "Allow"
         Action = ["ec2:DescribeVpcs", "ec2:DescribeNatGateways", "ec2:DescribeInstances", "ec2:DescribeInstanceStatus",
-          "ec2:DescribeVolumes", "ec2:DescribeSnapshots", "rds:DescribeDBInstances", "rds:DescribeDBSnapshots",
+          "ec2:DescribeVolumes", "ec2:DescribeSnapshots", "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups",
+          "ec2:DescribeSecurityGroupRules", "ec2:DescribeRouteTables", "ec2:DescribeInternetGateways",
+          "ec2:DescribeAddresses", "ec2:DescribeNetworkInterfaces", "rds:DescribeDBInstances", "rds:DescribeDBSnapshots",
+          "rds:DescribeDBSubnetGroups",
           "elasticloadbalancing:Describe*", "elasticache:DescribeCacheClusters", "ecs:DescribeServices", "sqs:GetQueueUrl",
         "es:DescribeDomain", "tag:GetResources", "cloudwatch:GetMetricStatistics"]
         Resource = "*"

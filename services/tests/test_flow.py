@@ -11,6 +11,39 @@ from infraflow.store import MemoryStore, get_store, set_store
 T0 = datetime(2026, 11, 2, 2, 0, tzinfo=timezone.utc)  # 09:00 Monday local time
 
 
+class FakeEC2Leftovers:
+    """describe calls for resources the tagging API still lists after a Reclaim."""
+
+    class NotFound(Exception):
+        def __init__(self, code):
+            super().__init__(code)
+            self.response = {"Error": {"Code": code}}
+
+    def __init__(self, instances=None, nats=None, existing=()):
+        self.instances = instances or {}
+        self.nats = nats or {}
+        self.existing = set(existing)
+
+    def describe_instances(self, InstanceIds):
+        return {"Reservations": [{"Instances": [{"State": {"Name": self.instances.get(i, "running")}} for i in InstanceIds]}]}
+
+    def describe_nat_gateways(self, NatGatewayIds):
+        return {"NatGateways": [{"State": self.nats.get(n, "available")} for n in NatGatewayIds]}
+
+    def describe_subnets(self, SubnetIds):
+        if not set(SubnetIds) & self.existing:
+            raise self.NotFound("InvalidSubnetID.NotFound")
+        return {"Subnets": [{"SubnetId": s} for s in SubnetIds]}
+
+    def describe_security_group_rules(self, SecurityGroupRuleIds):
+        return {"SecurityGroupRules": [{"SecurityGroupRuleId": r} for r in SecurityGroupRuleIds if r in self.existing]}
+
+    def describe_volumes(self, VolumeIds):
+        if not set(VolumeIds) & self.existing:
+            raise self.NotFound("InvalidVolume.NotFound")
+        return {"Volumes": [{"State": "available"} for v in VolumeIds]}
+
+
 class FakeSFN:
     def __init__(self):
         self.started = []
@@ -261,13 +294,13 @@ class Flow(unittest.TestCase):
                 return {"ResourceTagMappingList": [{"ResourceARN": a, "Tags": []} for a in self.left]}
 
         tg = Tagging()
-        drivers.set_clients({"stepfunctions": self.sfn, "resourcegroupstaggingapi": tg})
+        drivers.set_clients({"stepfunctions": self.sfn, "resourcegroupstaggingapi": tg, "ec2": FakeEC2Leftovers()})
         self.assertEqual(self.run_controller(env_id)["result"], "verifying")
         tg.left = []
         self.assertEqual(self.run_controller(env_id)["result"], "reclaimed")
         self.assertEqual(self.store.get_env(env_id)["status"], "RECLAIMED")
 
-    def _reclaimed_with_leftovers(self, left):
+    def _reclaimed_with_leftovers(self, left, ec2=None):
         self.create()
         env_id, op_id = self.invoked[0]
         self.run_controller(env_id, op_id)
@@ -280,7 +313,7 @@ class Flow(unittest.TestCase):
             def get_resources(self, **kw):
                 return {"ResourceTagMappingList": [{"ResourceARN": a, "Tags": []} for a in left]}
 
-        drivers.set_clients({"stepfunctions": self.sfn, "resourcegroupstaggingapi": Tagging()})
+        drivers.set_clients({"stepfunctions": self.sfn, "resourcegroupstaggingapi": Tagging(), "ec2": ec2 or FakeEC2Leftovers()})
         return env_id
 
     def test_verify_blocks_when_resources_remain(self):
@@ -291,6 +324,30 @@ class Flow(unittest.TestCase):
         env = self.store.get_env(env_id)
         self.assertEqual(env["blocked_reason"]["code"], "VERIFY_FAILED")
         self.assertNotEqual(env.get("status"), "RECLAIMED")
+
+    def test_verify_ignores_removed_resources_the_tagging_api_still_lists(self):
+        left = ["arn:aws:ec2:x:1:instance/i-1", "arn:aws:ec2:x:1:natgateway/nat-1"]
+        ec2 = FakeEC2Leftovers(instances={"i-1": "terminated"}, nats={"nat-1": "deleted"})
+        env_id = self._reclaimed_with_leftovers(left, ec2)
+        self.assertEqual(self.run_controller(env_id)["result"], "reclaimed")
+
+    def test_verify_ignores_what_was_removed_with_the_network(self):
+        left = ["arn:aws:ec2:x:1:subnet/subnet-1", "arn:aws:ec2:x:1:security-group-rule/sgr-1",
+                "arn:aws:ec2:x:1:volume/vol-1"]
+        env_id = self._reclaimed_with_leftovers(left, FakeEC2Leftovers())
+        self.assertEqual(self.run_controller(env_id)["result"], "reclaimed")
+
+    def test_verify_counts_an_existing_subnet_and_an_unknown_type(self):
+        left = ["arn:aws:ec2:x:1:subnet/subnet-1", "arn:aws:sqs:x:1:queue-1"]
+        env_id = self._reclaimed_with_leftovers(left, FakeEC2Leftovers(existing={"subnet-1"}))
+        self.assertEqual(self.run_controller(env_id)["left"], left)
+
+    def test_verify_counts_a_resource_that_still_exists(self):
+        left = ["arn:aws:ec2:x:1:instance/i-1", "arn:aws:ec2:x:1:natgateway/nat-1"]
+        ec2 = FakeEC2Leftovers(instances={"i-1": "terminated"}, nats={"nat-1": "deleting"})
+        env_id = self._reclaimed_with_leftovers(left, ec2)
+        r = self.run_controller(env_id)
+        self.assertEqual((r["result"], r["left"]), ("verifying", ["arn:aws:ec2:x:1:natgateway/nat-1"]))
 
     def test_retry_after_verify_failed_verifies_again(self):
         left = ["arn:aws:ec2:x:1:natgateway/nat-1"]

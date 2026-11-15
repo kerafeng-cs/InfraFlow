@@ -340,10 +340,68 @@ def _is_final_backup(res: dict) -> bool:
     return is_snapshot and tags.get("infraflow:purpose") in ("final-backup", "hibernate")
 
 
+# How to look up a resource that the tagging API lists, by the type in its ARN: the describe
+# call, its id parameter, the list in the response, and the field and values meaning removed.
+_EC2_LOOKUP = {
+    "instance": ("describe_instances", "InstanceIds", None, None),
+    "natgateway": ("describe_nat_gateways", "NatGatewayIds", "NatGateways", ("State", {"deleted"})),
+    "volume": ("describe_volumes", "VolumeIds", "Volumes", ("State", {"deleted"})),
+    "subnet": ("describe_subnets", "SubnetIds", "Subnets", None),
+    "security-group": ("describe_security_groups", "GroupIds", "SecurityGroups", None),
+    "security-group-rule": ("describe_security_group_rules", "SecurityGroupRuleIds", "SecurityGroupRules", None),
+    "vpc": ("describe_vpcs", "VpcIds", "Vpcs", None),
+    "route-table": ("describe_route_tables", "RouteTableIds", "RouteTables", None),
+    "internet-gateway": ("describe_internet_gateways", "InternetGatewayIds", "InternetGateways", None),
+    "elastic-ip": ("describe_addresses", "AllocationIds", "Addresses", None),
+    "network-interface": ("describe_network_interfaces", "NetworkInterfaceIds", "NetworkInterfaces", None),
+}
+
+
+def _not_found(e: Exception) -> bool:
+    code = ""
+    if isinstance(getattr(e, "response", None), dict):
+        code = str(e.response.get("Error", {}).get("Code", ""))
+    return "NotFound" in code or "NotFound" in type(e).__name__
+
+
+def _gone(arn: str) -> bool:
+    """Whether a resource the tagging API still lists has in fact been removed. The tagging API
+    keeps listing removed resources with their tags for up to about an hour: a terminated
+    instance, a deleted NAT gateway, and the subnets, volumes and security group rules removed
+    with them. A type without a lookup here counts as present, so Verify stays conservative."""
+    parts = arn.split(":", 5)
+    service, kind_id = parts[2], parts[5]
+    try:
+        if service == "ec2" and "/" in kind_id:
+            kind, rid = kind_id.split("/", 1)
+            if kind not in _EC2_LOOKUP:
+                return False
+            method, param, key, terminal = _EC2_LOOKUP[kind]
+            r = getattr(drivers.aws("ec2"), method)(**{param: [rid]})
+            if kind == "instance":
+                return all(i["State"]["Name"] == "terminated" for res in r["Reservations"] for i in res["Instances"])
+            items = r.get(key) or []
+            if terminal:
+                field, values = terminal
+                return all(it.get(field) in values for it in items)
+            return not items
+        if service == "elasticloadbalancing" and kind_id.startswith("loadbalancer/"):
+            return not drivers.aws("elbv2").describe_load_balancers(LoadBalancerArns=[arn])["LoadBalancers"]
+        if service == "elasticloadbalancing" and kind_id.startswith("targetgroup/"):
+            return not drivers.aws("elbv2").describe_target_groups(TargetGroupArns=[arn])["TargetGroups"]
+        if service == "rds" and kind_id.startswith("db:"):
+            return not drivers.aws("rds").describe_db_instances(DBInstanceIdentifier=kind_id[3:])["DBInstances"]
+        if service == "rds" and kind_id.startswith("subgrp:"):
+            return not drivers.aws("rds").describe_db_subnet_groups(DBSubnetGroupName=kind_id[7:])["DBSubnetGroups"]
+    except Exception as e:
+        return _not_found(e)
+    return False
+
+
 def _verify(env: dict, lease: dict) -> dict:
     store = get_store()
     left = [r["ResourceARN"] for r in tagged_resources([{"Key": "infraflow:env_id", "Values": [env["environment_id"]]}])
-            if not _is_final_backup(r)]
+            if not _is_final_backup(r) and not _gone(r["ResourceARN"])]
     attempts = int(env.get("verify_attempts", 0)) + 1
     if not left:
         store.update_env(env["environment_id"], {"status": "RECLAIMED", "actual": "RECLAIMED", "verify_attempts": attempts,
