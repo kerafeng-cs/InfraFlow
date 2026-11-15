@@ -702,6 +702,9 @@ def admin_resolve(event, me, env_id):
     env = store.get_env(env_id)
     fields = {"blocked": False, "resolved": {"by": me["sub"], "action": b["action"], "note": b["note"], "at": iso(_now())}}
     remove = ["blocked_reason"]
+    if env.get("status") == "VERIFYING":
+        # A retry gives the verification its full number of attempts again
+        fields["verify_attempts"] = 0
     if b["action"] == "force_cleanup":
         lease = store.get_lease(env["lease_id"])
         store.update_lease(env["lease_id"], {"reclaim_requested": True,

@@ -292,6 +292,19 @@ class Flow(unittest.TestCase):
         self.assertEqual(env["blocked_reason"]["code"], "VERIFY_FAILED")
         self.assertNotEqual(env.get("status"), "RECLAIMED")
 
+    def test_retry_after_verify_failed_verifies_again(self):
+        left = ["arn:aws:ec2:x:1:natgateway/nat-1"]
+        env_id = self._reclaimed_with_leftovers(left)
+        for _ in range(controller.VERIFY_MAX_ATTEMPTS):
+            self.run_controller(env_id)
+        self.assertTrue(self.store.get_env(env_id)["blocked"])
+        st, b = self.call("POST", f"/v1/admin/environments/{env_id}/resolve", {"action": "retry", "note": "lag"}, admin=True)
+        self.assertEqual(st, 200)
+        self.assertEqual(self.store.get_env(env_id)["verify_attempts"], 0)
+        self.assertEqual(self.run_controller(env_id)["result"], "verifying")  # a full set of attempts again
+        left.clear()
+        self.assertEqual(self.run_controller(env_id)["result"], "reclaimed")
+
     def test_operation_past_deadline_blocks_with_unknown_outcome(self):
         self.create()
         env_id, op_id = self.invoked[0]
