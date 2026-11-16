@@ -24,15 +24,21 @@ DRAIN_SECONDS = 90
 def target_vector(graph: Graph, current: dict, level: str, keep_final_backup: bool = True) -> dict:
     """Concrete target vector of one level transition.
 
-    - awake and prepared: exactly the level vector.
+    - awake: exactly the level vector.
+    - prepared: the level vector, except that a data resource that is SNAPSHOTTED stays so. An
+      Environment created from a backup starts with its data SNAPSHOTTED; preparing it must
+      neither restore the data nor drop the snapshot.
     - reclaimed: everything ABSENT; data resources become SNAPSHOTTED when a final backup is kept.
     - sleep levels: an instance that is already CHEAPER than its target stays as it is (it is not
       woken only to be put to sleep), provided the resulting vector is safe; otherwise the exact
       level vector is used.
     """
     base = graph.level_vector(level)
-    if level in ("awake", "prepared"):
+    if level == "awake":
         return base
+    if level == "prepared":
+        return {u: SNAPSHOTTED if graph.instances[u].is_data and current[u] == SNAPSHOTTED else base[u]
+                for u in graph.order}
     if level == "reclaimed":
         out = {}
         for u in graph.order:

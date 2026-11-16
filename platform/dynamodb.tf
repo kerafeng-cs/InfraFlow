@@ -15,8 +15,11 @@ resource "aws_dynamodb_table" "leases" {
   }
   global_secondary_index {
     name            = "org_id"
-    hash_key        = "org_id"
     projection_type = "ALL"
+    key_schema {
+      attribute_name = "org_id"
+      key_type       = "HASH"
+    }
   }
   point_in_time_recovery {
     enabled = true
@@ -42,13 +45,19 @@ resource "aws_dynamodb_table" "environments" {
   }
   global_secondary_index {
     name            = "lease_id"
-    hash_key        = "lease_id"
     projection_type = "ALL"
+    key_schema {
+      attribute_name = "lease_id"
+      key_type       = "HASH"
+    }
   }
   global_secondary_index {
     name            = "host"
-    hash_key        = "host"
     projection_type = "ALL"
+    key_schema {
+      attribute_name = "host"
+      key_type       = "HASH"
+    }
   }
   point_in_time_recovery {
     enabled = true
@@ -74,9 +83,15 @@ resource "aws_dynamodb_table" "operations" {
   }
   global_secondary_index {
     name            = "environment_id"
-    hash_key        = "environment_id"
-    range_key       = "requested_at"
     projection_type = "ALL"
+    key_schema {
+      attribute_name = "environment_id"
+      key_type       = "HASH"
+    }
+    key_schema {
+      attribute_name = "requested_at"
+      key_type       = "RANGE"
+    }
   }
 }
 

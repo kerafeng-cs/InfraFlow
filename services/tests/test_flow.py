@@ -65,7 +65,9 @@ def ev(method, path, body=None, key="k1", query=None, org="org_a", admin=False):
             "body": json.dumps(body) if body is not None else None, "queryStringParameters": query}
 
 
-class Flow(unittest.TestCase):
+class FlowBase(unittest.TestCase):
+    """API, controller and a fake infrastructure, without tests of its own."""
+
     def setUp(self):
         self.store = MemoryStore()
         set_store(self.store)
@@ -112,7 +114,8 @@ class Flow(unittest.TestCase):
         body.update(over)
         return self.call("POST", "/v1/leases", body)
 
-    # -----------------------------------------------------------------
+
+class Flow(FlowBase):
     def test_full_cycle(self):
         st, body = self.create()
         self.assertEqual(st, 202)
@@ -281,6 +284,8 @@ class Flow(unittest.TestCase):
         controller._NOW = datetime(2027, 1, 2, tzinfo=timezone.utc)
         r = self.run_controller(env_id)
         self.assertEqual(r["action"], "RECLAIM")
+        op = self.store.get_op(r["operation_id"])
+        self.assertEqual((op["from_state"], op["target_level"], op["availability"]), ("AWAKE", "reclaimed", "single"))
         p = self.sfn.started[-1]["input"]["plan"]
         self.assertEqual(p["stages"][-1]["terraform"]["mode"], "destroy")
         self.assertIn("snapshot", [d["action"] for s in p["stages"] for d in s["drivers"]])
@@ -425,6 +430,22 @@ class Flow(unittest.TestCase):
         st, public = self.call("GET", "/v1/public/status", query={"host": env_id})
         self.assertTrue(public["can_wake"])
 
+    def test_hibernate_from_deep_is_reported_as_hibernate(self):
+        env_id = self._awake_env()
+        st, b = self.call("POST", f"/v1/environments/{env_id}/sleep", {}, key="h-1")
+        self.run_controller(env_id, b["operation_id"])
+        self.complete_last()
+        st, b = self.call("POST", f"/v1/environments/{env_id}/sleep", {"level": "hibernate"}, key="h-2")
+        self.assertEqual(st, 202)
+        self.run_controller(env_id, b["operation_id"])
+        self.complete_last()
+        # The next reconcile observes the resources; a hibernated Environment also satisfies deep,
+        # and must still be reported as hibernate, or the request looks pending forever
+        self.run_controller(env_id)
+        st, env = self.call("GET", f"/v1/environments/{env_id}")
+        self.assertEqual((env["actual"], env["requested"]), ("ASLEEP:hibernate", None))
+        self.assertEqual({k: v["allowed"] for k, v in env["actions"].items()}, {"wake": True, "sleep": False, "hibernate": False})
+
     def test_request_pending_until_the_controller_starts_it(self):
         env_id = self._awake_env()
         st, b = self.call("POST", f"/v1/environments/{env_id}/sleep", {}, key="p-1")
@@ -504,3 +525,120 @@ class Flow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeRDSSnapshots:
+    """describe_db_snapshots for the snapshots a restore needs."""
+
+    class NotFound(Exception):
+        response = {"Error": {"Code": "DBSnapshotNotFound"}}
+
+    def __init__(self, existing):
+        self.existing = set(existing)
+
+    def describe_db_snapshots(self, DBSnapshotIdentifier):
+        if DBSnapshotIdentifier not in self.existing:
+            raise self.NotFound()
+        return {"DBSnapshots": [{"Status": "available"}]}
+
+
+class NoLeftovers:
+    def get_resources(self, **kw):
+        return {"ResourceTagMappingList": []}
+
+
+class RestoreFromBackup(FlowBase):
+    """A new Lease that starts from the final backup of a reclaimed Environment."""
+
+    def reclaimed_with_backup(self):
+        self.create()
+        env_id, op_id = self.invoked[0]
+        self.run_controller(env_id, op_id)
+        self.complete_last()
+        controller._NOW = datetime(2027, 1, 2, tzinfo=timezone.utc)  # past expiry: Reclaim keeping a backup
+        r = self.run_controller(env_id)
+        self.assertEqual(r["action"], "RECLAIM")
+        self.store.update_op(r["operation_id"], {"snapshots": {"database": "acme-dev-final"}})  # as rds_snapshot does
+        self.complete_last()
+        drivers.set_clients({"stepfunctions": self.sfn, "resourcegroupstaggingapi": NoLeftovers(), "ec2": FakeEC2Leftovers()})
+        self.assertEqual(self.run_controller(env_id)["result"], "reclaimed")
+        return env_id
+
+    def create_from(self, source, key="r1", **over):
+        body = {"name": "beta", "environments": ["dev"], "blueprint_ref": "web-db@1.1.0", "restore_from": source,
+                "starts_at": "2027-01-02T00:00:00Z", "expires_at": "2027-02-01T00:00:00Z",
+                "data_policy": {"keep_final_backup": True},
+                "activity_policy": {"mode": "schedule", "utc_offset_minutes": 420,
+                                    "schedule": {"days": [1, 2, 3, 4, 5], "start": "08:00", "end": "19:00"}}}
+        body.update(over)
+        return self.call("POST", "/v1/leases", body, key=key)
+
+    def test_reclaim_records_the_final_backup(self):
+        env = self.store.get_env(self.reclaimed_with_backup())
+        self.assertEqual(env["status"], "RECLAIMED")
+        self.assertEqual(env["final_backup"]["snapshots"], {"database": "acme-dev-final"})
+        self.assertEqual(env["final_backup"]["components"], {"database": "aws-rds-postgres"})
+
+    def test_backups_are_listed_for_compatible_blueprints_only(self):
+        source = self.reclaimed_with_backup()
+        st, b = self.call("GET", "/v1/backups", query={"blueprint_ref": "web-db@1.1.0"}, key="b1")
+        self.assertEqual([(x["environment_id"], x["restores"]) for x in b["items"]], [(source, {"database": "acme-dev-final"})])
+        st, b = self.call("GET", "/v1/backups", query={"blueprint_ref": "web-only@1.1.0"}, key="b2")
+        self.assertEqual(b["items"], [])
+        st, b = self.call("GET", "/v1/backups", key="b3", org="org_b")
+        self.assertEqual(b["items"], [])
+
+    def test_new_lease_restores_the_backup_on_first_wake(self):
+        source = self.reclaimed_with_backup()
+        self.invoked.clear()
+        st, b = self.create_from(source)
+        self.assertEqual(st, 202, b)
+        env_id, op_id = self.invoked[0]
+        env = self.store.get_env(env_id)
+        self.assertEqual(env["snapshots"], {"database": "acme-dev-final"})
+        self.assertEqual(env["restored_from"]["environment_id"], source)
+        # The driver observes the data instance as SNAPSHOTTED because the Environment holds its snapshot
+        self.world[env_id] = {u: "ABSENT" for u in self.graph.order} | {"database": "SNAPSHOTTED"}
+        drivers.set_clients({"stepfunctions": self.sfn, "rds": FakeRDSSnapshots({"acme-dev-final"})})
+
+        # Saturday: outside the schedule, so the Environment is only prepared and the data stays in the backup
+        r = self.run_controller(env_id, op_id)
+        self.assertEqual(r["action"], "PROVISION")
+        self.assertEqual(self.sfn.started[-1]["input"]["plan"]["to"]["database"], "SNAPSHOTTED")
+        self.complete_last()
+
+        # Monday 09:00 local: the Wake restores the database from the backup
+        controller._NOW = datetime(2027, 1, 4, 2, 0, tzinfo=timezone.utc)
+        r = self.run_controller(env_id)
+        self.assertEqual(r["action"], "WAKE")
+        stages = self.sfn.started[-1]["input"]["plan"]["stages"]
+        restore = [s for s in stages if "database" in ((s.get("terraform") or {}).get("restore") or [])]
+        self.assertEqual(len(restore), 1)
+        self.assertEqual(restore[0]["terraform"]["vars"]["database_restore_snapshot"], "acme-dev-final")
+        self.complete_last()
+        self.assertEqual(self.store.get_env(env_id)["actual"], "AWAKE")
+        self.assertEqual(self.store.get_env(source)["final_backup"]["snapshots"], {"database": "acme-dev-final"})
+
+    def test_a_deleted_backup_blocks_instead_of_failing_in_terraform(self):
+        source = self.reclaimed_with_backup()
+        self.invoked.clear()
+        self.create_from(source, starts_at="2027-01-04T00:00:00Z")
+        env_id, op_id = self.invoked[0]
+        self.world[env_id] = {u: "ABSENT" for u in self.graph.order} | {"database": "SNAPSHOTTED"}
+        drivers.set_clients({"stepfunctions": self.sfn, "rds": FakeRDSSnapshots(set())})
+        controller._NOW = datetime(2027, 1, 4, 2, 0, tzinfo=timezone.utc)
+        r = self.run_controller(env_id, op_id)
+        self.assertEqual((r["result"], r["code"]), ("blocked", "SNAPSHOT_NOT_FOUND"))
+        self.assertEqual(self.store.get_op(op_id)["status"], "FAILED")
+        self.assertEqual(len(self.sfn.started), 2)  # nothing started after the source's two operations
+
+    def test_restore_is_refused_when_nothing_matches(self):
+        source = self.reclaimed_with_backup()
+        st, b = self.create_from(source, blueprint_ref="web-only@1.1.0")
+        self.assertEqual((st, b["error"]["code"]), (400, "BACKUP_INCOMPATIBLE"))
+        st, b = self.create_from("acme-qa", key="r2")  # never reclaimed
+        self.assertEqual((st, b["error"]["code"]), (404, "BACKUP_NOT_FOUND"))
+        st, b = self.call("POST", "/v1/leases", {"name": "gamma", "environments": ["dev"], "blueprint_ref": "web-db@1.1.0",
+                                                 "restore_from": source, "expires_at": "2027-02-01T00:00:00Z",
+                                                 "data_policy": {"keep_final_backup": True}}, key="o1", org="org_b")
+        self.assertEqual((st, b["error"]["code"]), (404, "BACKUP_NOT_FOUND"))

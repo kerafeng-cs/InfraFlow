@@ -64,6 +64,10 @@ aws cognito-idp admin-add-user-to-group --profile infraflow --user-pool-id "$POO
 
 Open `site_url`, sign in, set a new password, and create a Lease. Keep Lease and Environment names short (for example `acme` and `qa`): resource names derive from them and an ALB name is limited to 32 characters.
 
+### Starting from a backup
+
+A Lease created with `keep_final_backup` keeps one snapshot per data instance when it is reclaimed. A new Lease can start from it: in the console, choose the backup under Initial data; in the API, pass `restore_from` with the reclaimed Environment's id (`GET /v1/backups?blueprint_ref=...` lists the backups a blueprint can use). Every Environment of the new Lease restores its own copy on its first Wake. The backup is never modified or deleted by InfraFlow; delete it with `aws rds delete-db-snapshot` when it is no longer needed. The new Lease needs a different name, because the reclaimed Environment keeps its name.
+
 ## 5. Cost
 
 The platform is serverless and costs close to nothing while no Environment is awake. By the unit-price estimates in `services/infraflow/cost.py`, a small `web-db` Environment costs about 0.16 USD per hour awake and under 0.01 USD per hour in `deep` (storage only). The console shows, for each Lease, the estimated cost of running always on, of stopping only EC2 and RDS on the schedule, and of the transitions InfraFlow actually performed. Actual cost is available in Cost Explorer filtered by the `infraflow:env_id` tag.
@@ -102,3 +106,17 @@ aws ssm start-session --target <instance_id> \
 ```
 
 `ml-workbench` runs on `g4dn` instances. If the account quota "Running On-Demand G and VT instances" is 0, the first wake fails with `VcpuLimitExceeded` and the Environment is blocked; request at least 4 vCPUs (8 for size `medium`) in Service Quotas first.
+
+## 8. Timing report
+
+Every operation records when it was requested, started and finished, the state it started from and the target level. `infraflow.report` turns an export of the operations table into a table per transition (runs, failures, median, minimum and maximum duration) and a row per operation:
+
+```bash
+aws dynamodb scan --profile infraflow --table-name infraflow-dev-operations \
+  --projection-expression "operation_id,environment_id,#a,target_level,from_state,blueprint_ref,availability,#s,requested_at,started_at,finished_at,#e" \
+  --expression-attribute-names '{"#a":"action","#s":"status","#e":"error"}' --output json > ops.json
+cd services
+python3 -m infraflow.report ../ops.json --csv ../ops.csv
+```
+
+Duration runs from the start of execution to its end; for a Wake it includes the health check, for a Reclaim it excludes the verification that follows. Operations recorded before the start state was added show `-` in the From column. `ops.json` and `ops.csv` contain operation identifiers only, but keep them out of the repository like other exports.

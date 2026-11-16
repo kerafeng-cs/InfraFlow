@@ -206,7 +206,7 @@ def _env_view(env, detail=True, lease=None):
     v = {k: env.get(k) for k in ("environment_id", "lease_id", "name", "host", "status", "actual", "desired",
                                  "desired_source", "override", "dns", "app_url", "blocked", "blocked_reason",
                                  "active_operation_id", "last_activity_at", "awake_since", "observed_at",
-                                 "exposure")}
+                                 "exposure", "restored_from")}
     v["availability"] = _availability(env)
     if detail:
         v["instances"] = env.get("instances")
@@ -402,6 +402,15 @@ def create_lease(event, me):
                "health_path": app.get("health_path", DEFAULT_APP["health_path"])}
         if not app["health_path"].startswith("/") or not 1 <= app["port"] <= 65535:
             raise ApiError(400, "INVALID_REQUEST", "invalid app.port or app.health_path")
+        restore = {}
+        if b.get("restore_from"):
+            src = store.get_env(str(b["restore_from"]))
+            if src is None or src["org_id"] != me["org_id"] or not _final_backup(src):
+                raise ApiError(404, "BACKUP_NOT_FOUND", f"{b['restore_from']} has no final backup")
+            restore = _restorable(src, build_graph(cat, ref))
+            if not restore:
+                raise ApiError(400, "BACKUP_INCOMPATIBLE",
+                               f"{ref} has no data instance with the same name and component as the backup of {src['environment_id']}")
         dp = b.get("data_policy") or {}
         if "keep_final_backup" not in dp:
             raise ApiError(400, "INVALID_REQUEST", "data_policy.keep_final_backup must be set explicitly when creating a Lease")
@@ -426,7 +435,12 @@ def create_lease(event, me):
                            "status": "REQUESTED",
                            "actual": "REQUESTED", "dns": "SLEEP", "blocked": False, "created_at": iso(t),
                            "capabilities": ["SLEEP", "WAKE", "RECLAIM"],
-                           "tf_state_key": f"orgs/{me['org_id']}/envs/{env_id}/terraform.tfstate"})
+                           "tf_state_key": f"orgs/{me['org_id']}/envs/{env_id}/terraform.tfstate",
+                           # Starting from a backup: the data instances begin SNAPSHOTTED and the
+                           # first Wake restores them; the backup itself is never modified.
+                           **({"snapshots": dict(restore),
+                               "restored_from": {"environment_id": b["restore_from"], "snapshots": dict(restore)}}
+                              if restore else {})})
             op_id = controller.new_operation_id()
             store.put_op({"operation_id": op_id, "environment_id": env_id, "lease_id": lease_id, "action": "PROVISION",
                           "status": "ACCEPTED", "source": "MANUAL", "actor": me["sub"], "requested_at": iso(t)})
@@ -435,6 +449,50 @@ def create_lease(event, me):
         return 202, {"lease_id": lease_id, "operations": ops}
 
     return _idempotent(event, me, do)
+
+
+def _final_backup(env) -> dict:
+    """The final backup a reclaimed Environment kept, or an empty dict."""
+    fb = env.get("final_backup") or {}
+    return fb if env.get("status") == "RECLAIMED" and fb.get("snapshots") else {}
+
+
+def _restorable(src, graph) -> dict:
+    """Instance -> snapshot for the data instances of graph that the backup of src can restore:
+    same instance name and same component (any version of it)."""
+    fb = _final_backup(src)
+    out = {}
+    for u, snap in (fb.get("snapshots") or {}).items():
+        inst = graph.instances.get(u)
+        if inst is not None and inst.is_data and inst.component.split("@")[0] == (fb.get("components") or {}).get(u):
+            out[u] = snap
+    return out
+
+
+def list_backups(event, me):
+    """Final backups of reclaimed Environments in the organization. With ?blueprint_ref, only those a
+    new Lease of that blueprint can start from, with the instances each one restores."""
+    store = get_store()
+    ref = (event.get("queryStringParameters") or {}).get("blueprint_ref")
+    graph = None
+    if ref:
+        cat = load_bundle()
+        if ref not in cat.blueprints:
+            raise ApiError(400, "BLUEPRINT_NOT_CERTIFIED", f"blueprint {ref} is not in the catalog")
+        graph = build_graph(cat, ref)
+    items = []
+    for env in store.list_envs():
+        fb = _final_backup(env)
+        if env["org_id"] != me["org_id"] or not fb:
+            continue
+        item = {"environment_id": env["environment_id"], "blueprint_ref": fb.get("blueprint_ref"),
+                "taken_at": fb.get("at"), "snapshots": fb["snapshots"]}
+        if graph is not None:
+            item["restores"] = _restorable(env, graph)
+            if not item["restores"]:
+                continue
+        items.append(item)
+    return 200, {"items": sorted(items, key=lambda x: x.get("taken_at") or "", reverse=True)}
 
 
 def list_leases(event, me):
@@ -741,6 +799,7 @@ ROUTES = [
     ("GET", r"/v1/operations/([^/]+)", get_operation, True),
     ("GET", r"/v1/public/status", public_status, False),
     ("POST", r"/v1/public/wake", public_wake, False),
+    ("GET", r"/v1/backups", list_backups, True),
     ("GET", r"/v1/admin/blocked", admin_blocked, True),
     ("POST", r"/v1/admin/environments/([^/]+)/resolve", admin_resolve, True),
     ("GET", r"/v1/admin/orphans", admin_orphans, True),

@@ -286,6 +286,25 @@ def rds_stop(ctx, action):
     return {"status": "DONE", "observed_state": STOPPED}
 
 
+def snapshot_exists(snapshot_driver: str, snapshot_id: str) -> bool:
+    """Whether a snapshot that a restore needs is still there and complete. The restore itself
+    would fail inside Terraform; checking first lets the controller block with a clear reason.
+    Returns True when AWS cannot answer, so an unrelated error never blocks an Environment."""
+    try:
+        if snapshot_driver.startswith("rds_"):
+            r = aws("rds").describe_db_snapshots(DBSnapshotIdentifier=snapshot_id)
+            return any(x["Status"] == "available" for x in r["DBSnapshots"])
+        if snapshot_driver.startswith("ebs_"):
+            r = aws("ec2").describe_snapshots(SnapshotIds=[snapshot_id])
+            return any(x["State"] == "completed" for x in r["Snapshots"])
+    except Exception as e:
+        code = ""
+        if isinstance(getattr(e, "response", None), dict):
+            code = str(e.response.get("Error", {}).get("Code", ""))
+        return not ("NotFound" in code or "NotFound" in type(e).__name__)
+    return True
+
+
 def rds_snapshot(ctx, action):
     """Takes a snapshot and waits until it is `available`. Records snapshot_id on the operation for Validator rule V3."""
     from .store import get_store

@@ -76,7 +76,8 @@ def actual_label(graph, sigma: dict, dns: str) -> str:
         return "AWAKE"
     if sigma == graph.level_vector("prepared"):
         return "PREPARED"
-    for lv in ("deep", "hibernate", "shallow"):
+    # Deepest first: a hibernated Environment also satisfies deep, and must be reported as hibernate
+    for lv in ("hibernate", "deep", "shallow"):
         if lv in graph.supported_levels and graph.satisfies_sleep(sigma, lv) and dns == "SLEEP":
             return f"ASLEEP:{lv}"
     return "MIXED"
@@ -192,6 +193,13 @@ def reconcile(env_id: str, *, trigger_op: str | None = None, observe=None) -> di
         return _block(env_id, "PLAN_UNSAFE", json.dumps(mc["violation"], ensure_ascii=False)[:900])
     p["model_check"] = {"passed": True, "states_explored": mc["states_explored"],
                         "drift": mc.get("start_violations") or []}
+    missing = _missing_snapshots(graph, p, env)
+    if missing:
+        detail = "cannot restore from a snapshot that no longer exists: " + ", ".join(missing)
+        if trigger_op:
+            store.update_op(trigger_op, {"status": "FAILED", "finished_at": iso(t),
+                                         "error": {"code": "SNAPSHOT_NOT_FOUND", "detail": detail}})
+        return _block(env_id, "SNAPSHOT_NOT_FOUND", detail)
     attach_vars(graph, p, lease, env)
 
     op_id = trigger_op or new_operation_id()
@@ -206,7 +214,10 @@ def reconcile(env_id: str, *, trigger_op: str | None = None, observe=None) -> di
     op = store.get_op(op_id) or {"operation_id": op_id, "environment_id": env_id, "lease_id": env["lease_id"],
                                  "requested_at": iso(t), "source": source, "actor": "controller"}
     op.update({"action": action_of(level), "target_level": level, "status": "RUNNING", "plan": p,
-               "reason": source, "started_at": iso(t)})
+               "reason": source, "started_at": iso(t),
+               # Recorded for the timing report: where the transition started, and on what
+               "from_state": label, "blueprint_ref": lease["blueprint_ref"],
+               "availability": (lease.get("parameters") or {}).get("availability", "single")})
     store.put_op(op)
     ctx["operation_id"] = op_id
     ctx["allow_data_loss"] = bool(p.get("allow_data_loss"))
@@ -253,6 +264,18 @@ def _check_stale(env: dict, t: datetime) -> dict:
     return {"environment_id": env["environment_id"], "result": "busy", "operation_id": env["active_operation_id"]}
 
 
+def _missing_snapshots(graph, p: dict, env: dict) -> list:
+    """The snapshots this plan restores from that are no longer available."""
+    snaps = env.get("snapshots") or {}
+    out = []
+    for st in p["stages"]:
+        for u in (st.get("terraform") or {}).get("restore") or []:
+            driver = graph.instances[u].drivers.get("snapshot", "")
+            if snaps.get(u) and not drivers.snapshot_exists(driver, snaps[u]):
+                out.append(f"{u} ({snaps[u]})")
+    return out
+
+
 def _block(env_id: str, code: str, detail: str) -> dict:
     get_store().update_env(env_id, {"blocked": True, "blocked_reason": {"code": code, "detail": detail, "at": iso(now())}})
     return {"environment_id": env_id, "result": "blocked", "code": code, "detail": detail}
@@ -289,6 +312,14 @@ def finish(event: dict) -> dict:
             fields.update({"actual": "PREPARED", "status": "PREPARED"})
         elif level == "reclaimed":
             fields.update({"actual": "RECLAIMED", "status": "VERIFYING", "verify_attempts": 0})
+            # The final backup: the snapshot of each data instance that remains, and the component
+            # it came from, so that a new Lease can start from it (api.list_backups)
+            kept = {u: snaps[u] for u in graph.order
+                    if graph.instances[u].is_data and after.get(u) == SNAPSHOTTED and snaps.get(u)}
+            if kept:
+                fields["final_backup"] = {"blueprint_ref": lease["blueprint_ref"], "snapshots": kept,
+                                          "components": {u: graph.instances[u].component.split("@")[0] for u in kept},
+                                          "at": iso(t)}
         else:
             fields.update({"actual": f"ASLEEP:{level}", "status": "ACTIVE"})
             if op.get("reason") == "IDLE":

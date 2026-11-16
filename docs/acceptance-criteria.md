@@ -34,6 +34,8 @@ Test references are relative to `services/tests/`.
 | L-16 | A Lease chooses Multi-AZ for a blueprint that offers it | NAT Gateway and application run in each of two AZs and RDS runs Multi-AZ; the dependency graph is unchanged, so the certification holds; the API rejects the parameter for blueprints that do not declare it. | Covered | `test_ics.TestAvailability`, `test_flow.test_lease_parameters_follow_the_blueprint` |
 | L-17 | One component runs several instances (Multi-AZ application) | Start, stop and observe treat them as one unit; it is awake only when every instance runs. | Covered | `test_drivers.test_ec2_drivers_treat_the_instances_of_a_role_as_one_unit` |
 | L-18 | Several Environments in one region | Their Availability Zones are chosen from `env_id`, so an AZ outage does not stop all of them; the choice does not change while a zone is impaired. | Partial | `test_ics.test_network_spreads_environments_across_zones` checks the module; the spread is verified only against a real account. |
+| L-19 | A new Lease starts from the final backup of a reclaimed Environment | Only backups whose data instances match the blueprint by name and component are offered; the data stays SNAPSHOTTED until the first Wake, which restores it; the backup is not modified. | Covered | `test_flow.RestoreFromBackup` |
+| L-20 | A snapshot to restore from was deleted outside InfraFlow | The Environment is blocked with `SNAPSHOT_NOT_FOUND` before any Terraform runs. | Covered | `test_flow.RestoreFromBackup.test_a_deleted_backup_blocks_instead_of_failing_in_terraform` |
 
 ## Data safety and plan scope
 

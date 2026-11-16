@@ -968,6 +968,11 @@
           </div>
         </fieldset>
 
+        <fieldset id="lf-initial"><legend>Initial data</legend><div class="fields">
+          <div class="field wide"><label for="lf-backup">Start from</label><select id="lf-backup"><option value="">Empty database</option></select>
+          <span class="help" id="lf-backup-help">Restores the data from the final backup of a reclaimed Environment on the first wake. Every Environment of this Lease gets its own copy; the backup itself is kept unchanged.</span></div>
+        </div></fieldset>
+
         <fieldset><legend>Environments</legend>
           <div class="repeat-list" id="lf-envs"></div>
           <br>
@@ -1056,6 +1061,36 @@
       $("lf-health-field").hidden = Boolean(bp) && bp.classification.exposure !== "public";
       $("lf-private-help").hidden = !bp || bp.classification.exposure === "public";
       $("lf-availability-field").hidden = !bp || !offers_multi_az(bp);
+      $("lf-initial").hidden = !persistent;
+      if (bp && persistent && bp.ref !== backups_ref)
+      {
+        load_backups(bp.ref);
+      }
+    };
+    // Final backups that the selected blueprint can start from; reloaded when the blueprint changes
+    let backups_ref = null;
+    const load_backups = async (ref) =>
+    {
+      backups_ref = ref;
+      const select = $("lf-backup");
+      mount(select, html`<option value="">Empty database</option>`);
+      try
+      {
+        const items = (await api("GET", `/v1/backups?blueprint_ref=${encodeURIComponent(ref)}`)).items || [];
+        if (backups_ref !== ref)
+        {
+          return;  // another blueprint was selected meanwhile
+        }
+        mount(select, html`<option value="">Empty database</option>${items.map((b) => html`<option value="${b.environment_id}">Backup of ${b.environment_id} (${b.blueprint_ref}), ${when(b.taken_at)}</option>`)}`);
+        $("lf-backup-help").textContent = items.length
+          ? "Restores the data from the final backup of a reclaimed Environment on the first wake. Every Environment of this Lease gets its own copy; the backup itself is kept unchanged."
+          : "No reclaimed Environment has kept a final backup that this blueprint can restore.";
+      }
+      catch (err)
+      {
+        backups_ref = null;
+        $("lf-backup-help").textContent = "The list of backups could not be loaded.";
+      }
     };
     const multi_az = () => !$("lf-availability-field").hidden && $("lf-availability").value === "multi";
     const render_blueprints = () =>
@@ -1161,6 +1196,10 @@
         activity_policy: read_policy($("lf-policy"), "lf"),
         data_policy: { keep_final_backup: bp.classification.data === "persistent" && $("lf-keep").checked },
       };
+      if (bp.classification.data === "persistent" && $("lf-backup").value)
+      {
+        body.restore_from = $("lf-backup").value;
+      }
       // Blueprints that run no container of the Lease (a database or search sandbox) take no app settings.
       if (bp.classification.workload)
       {
@@ -1207,6 +1246,7 @@
         <dt>Name</dt><dd>${body.name}</dd>
         <dt>Blueprint</dt><dd>${body.blueprint_ref}, ${body.parameters.size}${body.parameters.availability === "multi" ? ", Multi-AZ" : ""}</dd>
         <dt>Environments</dt><dd>${body.environments.join(", ")}</dd>
+        ${selected_blueprint().classification.data === "persistent" ? html`<dt>Initial data</dt><dd>${body.restore_from ? `Restored from the backup of ${body.restore_from}` : "Empty database"}</dd>` : ""}
         <dt>Lifetime</dt><dd>${when(body.starts_at)} to ${when(body.expires_at)}</dd>
         ${body.app ? html`<dt>Application</dt><dd><code>${body.app.image}</code>, port ${body.app.port}${selected_blueprint().classification.exposure === "public" ? html`, health <code>${body.app.health_path}</code>` : ""}</dd>` : ""}
         <dt>Activity</dt><dd>${policy_summary(body.activity_policy)}</dd>
@@ -1508,6 +1548,7 @@
               <dt>Awake since</dt><dd>${env.actual === "AWAKE" ? when(env.awake_since) : "-"}</dd>
               <dt>Last activity</dt><dd>${env.last_activity_at ? `${when(env.last_activity_at)}, ${ago(env.last_activity_at)}` : "-"}</dd>
               <dt>Checked</dt><dd>${env.observed_at ? `${when(env.observed_at)}, ${ago(env.observed_at)}` : "Not yet"}</dd>
+              ${env.restored_from ? html`<dt>Started from</dt><dd>Backup of ${env.restored_from.environment_id}</dd>` : ""}
             </dl>
             ${active ? html`<div class="banner"><strong>${OPERATION_LABEL[active.action] || status_label(active.action)}</strong><span class="muted">started ${when(active.started_at || active.requested_at)}, running ${duration(active.started_at || active.requested_at, new Date().toISOString())}</span></div>` : ""}
           </div>
